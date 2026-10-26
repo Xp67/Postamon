@@ -1,0 +1,701 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { downloadDir, join } from "@tauri-apps/api/path";
+import { save } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { CircleCheck, CircleArrowUp, RefreshCw, RotateCw, SquarePen, TriangleAlert } from "lucide-react";
+import {
+  api,
+  errorText,
+  type Account,
+  type Attachment,
+  type ChatConversation,
+  type ChatEventFor,
+  type ChatStatusFor,
+  type CraftStatus,
+  type Folder,
+  type MailUpdated,
+  type MessagePage,
+  type Opened,
+  type SendReport,
+  type SyncError,
+  type UpdateInfo,
+  type WebProgress,
+} from "./api";
+import { AccountForm } from "./components/AccountForm";
+import { ArtCraftSetup } from "./components/ArtCraftSetup";
+import { ChatView } from "./components/ChatView";
+import { Compose, type ComposeInit } from "./components/Compose";
+import { Help } from "./components/Help";
+import { MessageList } from "./components/MessageList";
+import { Rail } from "./components/Rail";
+import { Reader } from "./components/Reader";
+import { SignatureDialog } from "./components/SignatureDialog";
+import { Sidebar } from "./components/Sidebar";
+import { Viewer, type ViewerState } from "./components/Viewer";
+
+const PAGE = 200;
+
+type Current = { accountId: string; folder: string };
+type ToastKind = "info" | "warn" | "error";
+
+export default function App() {
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [folders, setFolders] = useState<Record<string, Folder[]>>({});
+  const [current, setCurrent] = useState<Current | null>(null);
+  const [page, setPage] = useState<MessagePage | null>(null);
+  const [selectedUid, setSelectedUid] = useState<number | null>(null);
+  const [opened, setOpened] = useState<Opened | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [openError, setOpenError] = useState("");
+  const [syncing, setSyncing] = useState<Record<string, boolean>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [compose, setCompose] = useState<ComposeInit | null>(null);
+  const [addingAccount, setAddingAccount] = useState(false);
+  const [signatureFor, setSignatureFor] = useState<Account | null>(null);
+  const [toast, setToast] = useState<{ text: string; kind: ToastKind } | null>(null);
+  const [craftStatus, setCraftStatus] = useState<CraftStatus | null>(null);
+  const [craftSetup, setCraftSetup] = useState(false);
+  const [view, setView] = useState<"mail" | "chat">("mail");
+  // Chat da leggere per casella (ogni casella è uno spazio di lavoro con la sua chat).
+  const [chatUnread, setChatUnread] = useState<Record<string, number>>({});
+  // Dove si era rimasti in ogni spazio di lavoro, per tornarci.
+  const places = useRef<Record<string, { folder: string; view: "mail" | "chat" }>>({});
+  const [viewer, setViewer] = useState<ViewerState | null>(null);
+  // Nuova versione di Postamon già scaricata, in attesa del riavvio.
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updating, setUpdating] = useState(false);
+  // Messaggio a cui appartiene l'allegato aperto nell'anteprima.
+  const viewerSource = useRef<{ accountId: string; folder: string; uid: number } | null>(null);
+
+  // Le callback degli eventi del motore leggono lo stato attuale da qui.
+  const currentRef = useRef<Current | null>(null);
+  const limitRef = useRef(PAGE);
+  const selectedRef = useRef<number | null>(null);
+  const toastTimer = useRef<number | undefined>(undefined);
+
+  const showToast = useCallback((text: string, kind: ToastKind = "info") => {
+    setToast({ text, kind });
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), kind === "info" ? 3500 : 7000);
+  }, []);
+
+  const loadFolders = useCallback(async (accountId: string) => {
+    try {
+      const list = await api.folders(accountId);
+      setFolders((prev) => ({ ...prev, [accountId]: list }));
+    } catch {
+      // casella appena tolta
+    }
+  }, []);
+
+  const loadMessages = useCallback(async (accountId: string, folder: string) => {
+    const result = await api.messages(accountId, folder, limitRef.current);
+    const cur = currentRef.current;
+    if (cur && cur.accountId === accountId && cur.folder === folder) setPage(result);
+  }, []);
+
+  const clearError = (accountId: string) =>
+    setErrors((e) => {
+      if (!(accountId in e)) return e;
+      const next = { ...e };
+      delete next[accountId];
+      return next;
+    });
+
+  const syncFolder = useCallback(
+    async (accountId: string, folder: string, refreshFolders: boolean) => {
+      setSyncing((s) => ({ ...s, [accountId]: true }));
+      try {
+        await api.sync(accountId, folder, refreshFolders);
+        clearError(accountId);
+        setLastSync(new Date());
+      } catch (e) {
+        setErrors((er) => ({ ...er, [accountId]: errorText(e) }));
+      } finally {
+        setSyncing((s) => ({ ...s, [accountId]: false }));
+      }
+      await loadFolders(accountId);
+      const cur = currentRef.current;
+      if (cur && cur.accountId === accountId && cur.folder === folder) await loadMessages(accountId, folder);
+    },
+    [loadFolders, loadMessages],
+  );
+
+  const selectFolder = useCallback(
+    (accountId: string, folder: string, sync = true) => {
+      const next = { accountId, folder };
+      currentRef.current = next;
+      limitRef.current = PAGE;
+      selectedRef.current = null;
+      setCurrent(next);
+      setPage(null);
+      setSelectedUid(null);
+      setOpened(null);
+      setOpenError("");
+      void loadMessages(accountId, folder);
+      if (sync) void syncFolder(accountId, folder, false);
+    },
+    [loadMessages, syncFolder],
+  );
+
+  // Avvio: caselle, cartelle dall'archivio, poi aggiornamento dal server.
+  useEffect(() => {
+    void (async () => {
+      const list = await api.accounts();
+      setAccounts(list);
+      await Promise.all(list.map((a) => loadFolders(a.id)));
+      if (list.length > 0) {
+        selectFolder(list[0].id, "INBOX", false);
+        for (const a of list) void syncFolder(a.id, "INBOX", true);
+      }
+      // Se sul PC mancano le app ArtCraft si propone di installarle.
+      const status = await api.craftStatus();
+      setCraftStatus(status);
+      if (list.length > 0 && status.missing.length > 0) setCraftSetup(true);
+    })();
+  }, [loadFolders, selectFolder, syncFolder]);
+
+  // Messaggi da leggere nelle chat delle caselle, per i numeri sulle icone.
+  useEffect(() => {
+    if (!accounts) return;
+    const refreshOne = async (accountId: string) => {
+      try {
+        const status = await api.internoStatus(accountId);
+        const list = status.configured
+          ? await api.internoGet<ChatConversation[]>(accountId, "/api/conversations")
+          : [];
+        setChatUnread((u) => ({ ...u, [accountId]: list.reduce((n, c) => n + c.unread, 0) }));
+      } catch {
+        // server della chat non raggiungibile: si lascia il numero com'era
+      }
+    };
+    const refreshAll = () => accounts.forEach((a) => void refreshOne(a.id));
+    refreshAll();
+    const unlisten = [
+      listen<ChatEventFor>("interno-event", ({ payload }) => void refreshOne(payload.accountId)),
+      listen<ChatStatusFor>("interno-status", ({ payload }) => void refreshOne(payload.accountId)),
+    ];
+    const timer = window.setInterval(refreshAll, 30_000);
+    return () => {
+      window.clearInterval(timer);
+      unlisten.forEach((u) => void u.then((f) => f()));
+    };
+  }, [accounts]);
+
+  // Si annota dove si è nello spazio di lavoro aperto.
+  useEffect(() => {
+    if (current) places.current[current.accountId] = { folder: current.folder, view };
+  }, [current, view]);
+
+  const switchWorkspace = useCallback(
+    (accountId: string) => {
+      if (currentRef.current?.accountId === accountId) return;
+      const place = places.current[accountId] ?? { folder: "INBOX", view: "mail" as const };
+      setView(place.view);
+      selectFolder(accountId, place.folder);
+    },
+    [selectFolder],
+  );
+
+  // Aggiornamenti: il motore li scarica in sottofondo e avvisa quando sono pronti.
+  useEffect(() => {
+    void api.updateStatus().then((s) => setUpdate(s.ready));
+    const unlisten = listen<UpdateInfo>("update-ready", ({ payload }) => setUpdate(payload));
+    return () => void unlisten.then((f) => f());
+  }, []);
+
+  const installUpdate = useCallback(async () => {
+    setUpdating(true);
+    try {
+      // Se va a buon fine Postamon si chiude qui e l'installer lo riapre.
+      await api.updateInstall();
+    } catch (e) {
+      setUpdating(false);
+      setUpdate(null);
+      showToast(errorText(e), "error");
+    }
+  }, [showToast]);
+
+  // Avanzamento del primo download dell'app che mostra l'anteprima.
+  useEffect(() => {
+    const unlisten = listen<WebProgress>("craft-progress", ({ payload }) =>
+      setViewer((v) => (v && !v.preview ? { ...v, progress: payload } : v)),
+    );
+    return () => void unlisten.then((f) => f());
+  }, []);
+
+  // Segnali del controllo periodico in sottofondo.
+  useEffect(() => {
+    const unlisten = [
+      listen<MailUpdated>("mail-updated", ({ payload }) => {
+        void loadFolders(payload.accountId);
+        const cur = currentRef.current;
+        if (cur && cur.accountId === payload.accountId && cur.folder === payload.folder) {
+          void loadMessages(cur.accountId, cur.folder);
+        }
+      }),
+      listen<SyncError>("sync-error", ({ payload }) =>
+        setErrors((e) => ({ ...e, [payload.accountId]: payload.message })),
+      ),
+      listen<MailUpdated>("sync-ok", ({ payload }) => {
+        clearError(payload.accountId);
+        setLastSync(new Date());
+      }),
+    ];
+    return () => unlisten.forEach((u) => void u.then((f) => f()));
+  }, [loadFolders, loadMessages]);
+
+  // Aggiorna lo spazio di lavoro aperto (le altre caselle le controlla il
+  // motore in sottofondo ogni minuto).
+  const refresh = useCallback(() => {
+    const cur = currentRef.current;
+    if (cur) void syncFolder(cur.accountId, cur.folder, true);
+  }, [syncFolder]);
+
+  const openMessage = useCallback(
+    async (uid: number, allowRemote = false) => {
+      const cur = currentRef.current;
+      if (!cur) return;
+      selectedRef.current = uid;
+      setSelectedUid(uid);
+      setOpening(true);
+      setOpenError("");
+      if (!allowRemote) setOpened(null);
+      try {
+        const result = await api.open(cur.accountId, cur.folder, uid, allowRemote);
+        if (selectedRef.current !== uid || currentRef.current !== cur) return;
+        setOpened(result);
+        setPage((p) => p && { ...p, items: p.items.map((m) => (m.uid === uid ? { ...m, seen: true } : m)) });
+        void loadFolders(cur.accountId);
+      } catch (e) {
+        if (selectedRef.current === uid) setOpenError(errorText(e));
+      } finally {
+        if (selectedRef.current === uid) setOpening(false);
+      }
+    },
+    [loadFolders],
+  );
+
+  const newMessage = useCallback(
+    (to = "") => {
+      if (!accounts?.length) return;
+      const account = accounts.find((a) => a.id === currentRef.current?.accountId) ?? accounts[0];
+      setCompose({
+        accountId: account.id,
+        to,
+        cc: "",
+        bcc: "",
+        subject: "",
+        body: account.signature ? `\n\n${account.signature}` : "",
+        inReplyTo: null,
+        references: null,
+        reply: null,
+        forward: null,
+        forwardAttachments: [],
+      });
+    },
+    [accounts],
+  );
+
+  // Scorciatoie: Ctrl+N nuovo messaggio, F5 aggiorna.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (compose || addingAccount || signatureFor) return;
+      if (e.ctrlKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        newMessage();
+      } else if (e.key === "F5") {
+        e.preventDefault();
+        refresh();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [compose, addingAccount, signatureFor, newMessage, refresh]);
+
+  const selected = page?.items.find((m) => m.uid === selectedUid) ?? null;
+
+  const reply = async (mode: "reply" | "replyAll" | "forward") => {
+    const cur = currentRef.current;
+    if (!cur || selectedUid === null) return;
+    try {
+      const data = await api.composeFrom(cur.accountId, cur.folder, selectedUid, mode);
+      setCompose({ ...data, bcc: "" });
+    } catch (e) {
+      showToast(errorText(e), "error");
+    }
+  };
+
+  const toggleSeen = async () => {
+    const cur = currentRef.current;
+    if (!cur || !selected) return;
+    const seen = !selected.seen;
+    try {
+      await api.setSeen(cur.accountId, cur.folder, selected.uid, seen);
+      setPage((p) => p && { ...p, items: p.items.map((m) => (m.uid === selected.uid ? { ...m, seen } : m)) });
+      void loadFolders(cur.accountId);
+    } catch (e) {
+      showToast(errorText(e), "error");
+    }
+  };
+
+  const toggleFlag = async () => {
+    const cur = currentRef.current;
+    if (!cur || !selected) return;
+    const flagged = !selected.flagged;
+    try {
+      await api.setFlagged(cur.accountId, cur.folder, selected.uid, flagged);
+      setPage((p) => p && { ...p, items: p.items.map((m) => (m.uid === selected.uid ? { ...m, flagged } : m)) });
+    } catch (e) {
+      showToast(errorText(e), "error");
+    }
+  };
+
+  const deleteMessage = async (uid: number) => {
+    const cur = currentRef.current;
+    if (!cur || !page) return;
+    const idx = page.items.findIndex((m) => m.uid === uid);
+    const next = page.items[idx + 1] ?? page.items[idx - 1] ?? null;
+    try {
+      await api.remove(cur.accountId, cur.folder, uid);
+      setPage((p) => p && { ...p, items: p.items.filter((m) => m.uid !== uid), cached: p.cached - 1, total: Math.max(0, p.total - 1) });
+      void loadFolders(cur.accountId);
+      if (next) void openMessage(next.uid);
+      else {
+        selectedRef.current = null;
+        setSelectedUid(null);
+        setOpened(null);
+      }
+    } catch (e) {
+      showToast(errorText(e), "error");
+    }
+  };
+
+  const loadOlder = async () => {
+    const cur = currentRef.current;
+    if (!cur || !page) return;
+    setLoadingOlder(true);
+    try {
+      if (page.cached <= page.items.length) await api.loadOlder(cur.accountId, cur.folder);
+      limitRef.current += PAGE;
+      await loadMessages(cur.accountId, cur.folder);
+    } catch (e) {
+      showToast(errorText(e), "error");
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  const showImages = async (always: boolean) => {
+    if (selectedUid === null || !opened) return;
+    if (always && opened.fromAddr) {
+      try {
+        await api.trustSender(opened.fromAddr);
+      } catch (e) {
+        showToast(errorText(e), "error");
+      }
+    }
+    await openMessage(selectedUid, true);
+  };
+
+  const openAttachment = async (a: Attachment) => {
+    const cur = currentRef.current;
+    if (!cur || selectedUid === null) return;
+    try {
+      await api.openAttachment(cur.accountId, cur.folder, selectedUid, a.index);
+    } catch (e) {
+      showToast(errorText(e), "warn");
+    }
+  };
+
+  // Allegato aperto dentro Postamon con l'app ArtCraft adatta; i tipi che
+  // nessuna app ArtCraft apre vanno al programma predefinito di Windows.
+  const previewAttachment = async (a: Attachment) => {
+    const cur = currentRef.current;
+    if (!cur || selectedUid === null) return;
+    const source = { accountId: cur.accountId, folder: cur.folder, uid: selectedUid };
+    viewerSource.current = source;
+    setViewer({ attachment: a, preview: null, progress: null, error: "" });
+    try {
+      const preview = await api.preview(source.accountId, source.folder, source.uid, a.index);
+      if (viewerSource.current !== source) {
+        if (preview) void api.previewClose(preview.token);
+        return;
+      }
+      if (!preview) {
+        viewerSource.current = null;
+        setViewer(null);
+        await openAttachment(a);
+        return;
+      }
+      setViewer((v) => v && { ...v, preview });
+    } catch (e) {
+      if (viewerSource.current === source) setViewer((v) => v && { ...v, error: errorText(e) });
+    }
+  };
+
+  const closeViewer = useCallback(() => {
+    setViewer((v) => {
+      if (v?.preview) void api.previewClose(v.preview.token);
+      return null;
+    });
+    viewerSource.current = null;
+  }, []);
+
+  const openViewerNative = async () => {
+    const src = viewerSource.current;
+    if (!src || !viewer) return;
+    try {
+      await api.openNative(src.accountId, src.folder, src.uid, viewer.attachment.index);
+    } catch (e) {
+      showToast(errorText(e), "error");
+    }
+  };
+
+  const saveAttachment = async (a: Attachment) => {
+    const cur = currentRef.current;
+    if (!cur || selectedUid === null) return;
+    let defaultPath = a.name;
+    try {
+      defaultPath = await join(await downloadDir(), a.name);
+    } catch {
+      // cartella Download non trovata: si propone solo il nome
+    }
+    const path = await save({ title: "Salva allegato", defaultPath });
+    if (!path) return;
+    try {
+      await api.saveAttachment(cur.accountId, cur.folder, selectedUid, a.index, path);
+      showToast(`Salvato: ${a.name}`);
+    } catch (e) {
+      showToast(errorText(e), "error");
+    }
+  };
+
+  const onSent = (report: SendReport) => {
+    setCompose(null);
+    if (report.warning) showToast(report.warning, "warn");
+    else showToast("Messaggio inviato");
+    const cur = currentRef.current;
+    if (cur) void loadFolders(cur.accountId);
+  };
+
+  const onAccountAdded = async (account: Account) => {
+    setAddingAccount(false);
+    const list = await api.accounts();
+    setAccounts(list);
+    await loadFolders(account.id);
+    setView("mail");
+    selectFolder(account.id, "INBOX", false);
+    void syncFolder(account.id, "INBOX", true);
+  };
+
+  const removeAccount = async (account: Account) => {
+    try {
+      await api.removeAccount(account.id);
+      const list = await api.accounts();
+      setAccounts(list);
+      setFolders((f) => {
+        const next = { ...f };
+        delete next[account.id];
+        return next;
+      });
+      delete places.current[account.id];
+      if (currentRef.current?.accountId === account.id) {
+        if (list.length) {
+          setView("mail");
+          selectFolder(list[0].id, "INBOX");
+        } else {
+          currentRef.current = null;
+          setCurrent(null);
+        }
+      }
+    } catch (e) {
+      showToast(errorText(e), "error");
+    }
+  };
+
+  if (accounts === null) return null;
+
+  if (accounts.length === 0) {
+    return (
+      <div className="setup">
+        <AccountForm first onAdded={(a) => void onAccountAdded(a)} />
+      </div>
+    );
+  }
+
+  const currentAccount = accounts.find((a) => a.id === current?.accountId) ?? accounts[0];
+  const workspaceFolders = folders[currentAccount.id] ?? [];
+  const currentFolder = workspaceFolders.find((f) => f.name === current?.folder);
+  const workspaceSyncing = syncing[currentAccount.id] ?? false;
+  const unseen = currentFolder?.unseen ?? 0;
+  const showRecipient = currentFolder?.role === "sent" || currentFolder?.role === "drafts";
+  // Numero sull'icona di ogni casella: posta in arrivo da leggere più chat.
+  const badges = Object.fromEntries(
+    accounts.map((a) => [
+      a.id,
+      (folders[a.id]?.find((f) => f.role === "inbox")?.unseen ?? 0) + (chatUnread[a.id] ?? 0),
+    ]),
+  );
+
+  return (
+    <div className="app">
+      <Rail
+        accounts={accounts}
+        current={currentAccount.id}
+        badges={badges}
+        onSelect={switchWorkspace}
+        onAdd={() => setAddingAccount(true)}
+      />
+      <header className="topbar">
+        <button className="btn btn-primary" onClick={() => newMessage()}>
+          <SquarePen />
+          Nuovo messaggio
+        </button>
+        <button className="btn" onClick={refresh} disabled={workspaceSyncing}>
+          <RefreshCw className={workspaceSyncing ? "spin" : ""} />
+          Aggiorna
+        </button>
+        <div className="topbar-status">
+          {workspaceSyncing
+            ? "Aggiornamento in corso…"
+            : lastSync
+              ? `Aggiornato alle ${lastSync.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}`
+              : ""}
+        </div>
+        {update && (
+          <div className="update-ready" role="status">
+            <CircleArrowUp />
+            <span>Postamon {update.version} è pronto</span>
+            {update.notes && <Help align="left">{update.notes}</Help>}
+            <button className="btn btn-primary btn-small" onClick={() => void installUpdate()} disabled={updating}>
+              <RotateCw className={updating ? "spin" : ""} />
+              {updating ? "Aggiornamento…" : "Riavvia e aggiorna"}
+            </button>
+          </div>
+        )}
+      </header>
+
+      <div className="workspace">
+        <Sidebar
+          account={currentAccount}
+          folders={workspaceFolders}
+          folder={current?.folder ?? null}
+          syncing={workspaceSyncing}
+          error={errors[currentAccount.id]}
+          onSelect={(folder) => {
+            setView("mail");
+            selectFolder(currentAccount.id, folder);
+          }}
+          onEditSignature={setSignatureFor}
+          onRemoveAccount={(a) => void removeAccount(a)}
+          chatActive={view === "chat"}
+          chatUnread={chatUnread[currentAccount.id] ?? 0}
+          onOpenChat={() => setView("chat")}
+        />
+        {view === "chat" ? (
+          <ChatView
+            key={currentAccount.id}
+            account={currentAccount}
+            dropEnabled={!compose && !viewer}
+            onToast={showToast}
+          />
+        ) : (
+          <>
+        <section className="sheet">
+          <MessageList
+            title={currentFolder?.display ?? "Posta in arrivo"}
+            subtitle={[currentAccount?.email, unseen > 0 ? `${unseen} da leggere` : ""].filter(Boolean).join(" · ")}
+            page={page}
+            showRecipient={showRecipient}
+            selectedUid={selectedUid}
+            loadingOlder={loadingOlder}
+            onSelect={(uid) => void openMessage(uid)}
+            onDelete={(uid) => void deleteMessage(uid)}
+            onLoadOlder={() => void loadOlder()}
+          />
+        </section>
+        <section className="sheet">
+          <Reader
+            opened={opened}
+            summary={selected}
+            loading={opening}
+            error={openError}
+            onReply={(mode) => void reply(mode)}
+            onToggleSeen={() => void toggleSeen()}
+            onToggleFlag={() => void toggleFlag()}
+            onDelete={() => selectedUid !== null && void deleteMessage(selectedUid)}
+            onShowImages={(always) => void showImages(always)}
+            onOpenAttachment={(a) => void previewAttachment(a)}
+            onSaveAttachment={(a) => void saveAttachment(a)}
+            onLink={(url) => void openUrl(url)}
+            onMailto={(address) => newMessage(address)}
+          />
+        </section>
+          </>
+        )}
+      </div>
+
+      {compose && (
+        // Ogni spazio di lavoro scrive dalla sua casella.
+        <Compose
+          accounts={accounts.filter((a) => a.id === compose.accountId)}
+          initial={compose}
+          onClose={() => setCompose(null)}
+          onSent={onSent}
+        />
+      )}
+
+      {viewer && (
+        <Viewer
+          state={viewer}
+          craftMissing={(craftStatus?.missing.length ?? 0) > 0}
+          onClose={closeViewer}
+          onSave={() => void saveAttachment(viewer.attachment)}
+          onOpenNative={() => void openViewerNative()}
+          onOpenSystem={() => void openAttachment(viewer.attachment)}
+          onInstallCraft={() => setCraftSetup(true)}
+        />
+      )}
+
+      {craftSetup && craftStatus && (
+        <ArtCraftSetup
+          status={craftStatus}
+          onClose={(installed) => {
+            setCraftSetup(false);
+            if (installed) showToast("ArtCraft è installato");
+            void api.craftStatus().then(setCraftStatus);
+          }}
+        />
+      )}
+
+      {addingAccount && (
+        <div className="overlay">
+          <AccountForm onAdded={(a) => void onAccountAdded(a)} onCancel={() => setAddingAccount(false)} />
+        </div>
+      )}
+
+      {signatureFor && (
+        <SignatureDialog
+          account={signatureFor}
+          onClose={() => setSignatureFor(null)}
+          onSaved={(updated) => {
+            setSignatureFor(null);
+            setAccounts((list) => list && list.map((a) => (a.id === updated.id ? updated : a)));
+            showToast("Firma salvata");
+          }}
+        />
+      )}
+
+      {toast && (
+        <div className={`toast ${toast.kind}`} role="status">
+          {toast.kind === "info" ? <CircleCheck /> : <TriangleAlert />}
+          {toast.text}
+        </div>
+      )}
+    </div>
+  );
+}

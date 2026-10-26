@@ -1,0 +1,58 @@
+[package]
+name = "postamon"
+version = "0.1.0"
+description = "Postamon - client di posta per le caselle aziendali"
+authors = ["Marco"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "postamon_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+serde_json = "1"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2.8.3"
+tauri-plugin-notification = "2.7.0"
+futures = "0.3.34"
+anyhow = "1.0.104"
+base64 = "0.23.1"
+mime_guess = "2.0.5"
+ammonia = "4.2.4"
+mail-parser = "0.11.9"
+tokio-native-tls = "0.3.1"
+native-tls = "0.2.18"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "fs"] }
+async-imap = { version = "0.12.0", default-features = false, features = ["runtime-tokio"] }
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-native-tls", "hostname"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+keyring = { version = "3", features = ["windows-native"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["native-tls", "rustls-no-provider", "stream", "json", "http2"] }
+sha2 = "0.11.1"
+tiny_http = "0.12.0"
+getrandom = "0.4.3"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "__rustls-tls"] }
+tauri-plugin-updater = "2.14.0"
+tauri-plugin-single-instance = "2.5.4"
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

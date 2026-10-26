@@ -1,0 +1,5 @@
+{
+  "serverChat": "chat.azienda.lan:8790",
+  "utenteSsh": "utente",
+  "chiaveSsh": "~\\.ssh\\id_ed25519"
+}

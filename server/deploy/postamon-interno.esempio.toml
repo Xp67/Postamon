@@ -1,0 +1,24 @@
+# Postamon interno: copia come postamon-interno.toml accanto all'eseguibile.
+bind = "0.0.0.0:8790"
+data_dir = "dati"
+max_file_mb = 4096
+
+# Accesso con indirizzo email e password della casella, verificati sul server
+# di posta (IMAP con TLS). Solo gli indirizzi dei domini elencati.
+[imap]
+host = "in.postassl.it"
+port = 993
+allowed_domains = ["dimensionesalotto.it"]
+
+# In alternativa: accesso con l'account Windows del dominio. Con LDAPS attivo
+# sul controller di dominio usare "ldaps://<controller>:636".
+# [ldap]
+# url = "ldap://<controller>:389"
+# upn_suffix = "azienda.local"
+# base_dn = "DC=AZIENDA,DC=local"
+
+# Utenti di prova (facoltativi).
+# [[local_users]]
+# username = "utente1"
+# display_name = "Utente Uno"
+# password = "..."
