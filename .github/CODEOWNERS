@@ -1,0 +1,9 @@
+# Chi rivede cosa. Con la protezione del branch main ("Require review from
+# Code Owners") nessun add-on entra nel catalogo senza questa revisione.
+*                         @Xp67
+/addons/                  @Xp67
+/sdk/                     @Xp67
+/scripts/addons.mjs       @Xp67
+/scripts/pubblica-addon.ps1 @Xp67
+/src-tauri/src/addons.rs  @Xp67
+/.github/                 @Xp67

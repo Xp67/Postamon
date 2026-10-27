@@ -1,0 +1,10 @@
+# Catalogo di prova firmato: i byte devono restare quelli firmati.
+src-tauri/testdata/** -text
+
+# Add-on e libreria con gli a capo LF su ogni PC: lo stesso sorgente dà lo
+# stesso pacchetto (e lo stesso SHA-256), da Windows come dalla CI.
+addons/** text=auto eol=lf
+sdk/** text=auto eol=lf
+
+# Script per il server Linux.
+*.sh text eol=lf

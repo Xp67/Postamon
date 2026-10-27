@@ -1797,3 +1797,358 @@ textarea.input {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+/* ---- add-on ---- */
+
+.rail-addons {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: var(--ink-2);
+}
+
+.rail-addons:hover {
+  background: var(--sheet);
+  color: var(--accent);
+}
+
+.rail-addons svg {
+  width: 20px;
+  height: 20px;
+}
+
+.addon-icon {
+  flex: none;
+  object-fit: contain;
+}
+
+.folder .addon-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.addon-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--sheet);
+}
+
+.addon-by {
+  margin-left: 8px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.dialog.addon-panel {
+  width: min(820px, 100%);
+  height: min(620px, 100%);
+}
+
+.addon-view {
+  grid-column: 2 / 4;
+}
+
+.addon-view-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--accent);
+}
+
+.addon-view-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.addon-view-head .addon-by {
+  flex: 1;
+  margin-left: 0;
+}
+
+.dialog.addons-dialog {
+  width: min(760px, 100%);
+  height: min(640px, 100%);
+}
+
+.addons-dialog .dialog-head > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.addons-dialog .dialog-head h3 {
+  flex: none;
+}
+
+.tabs {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+  margin-left: 12px;
+}
+
+.tabs button {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tabs button:hover {
+  background: rgba(23, 32, 42, 0.06);
+}
+
+.tabs button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.addons-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.addons-empty {
+  min-height: 260px;
+}
+
+.addon-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.addon-row.off .addon-main {
+  opacity: 0.55;
+}
+
+.addon-row-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.addon-row-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.addon-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.addon-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.addon-meta {
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.addon-desc {
+  margin-top: 2px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.addon-error {
+  display: flex;
+  gap: 6px;
+  color: var(--danger);
+}
+
+.addon-error svg {
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+}
+
+.addon-path {
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.addon-perms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.perm {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--line-soft);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.perm svg {
+  width: 13px;
+  height: 13px;
+}
+
+.perm.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.addon-actions {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tag svg {
+  width: 14px;
+  height: 14px;
+}
+
+.tag.ok {
+  background: #e6f3ec;
+  color: var(--ok);
+}
+
+.tag.warn {
+  max-width: 220px;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.switch input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.addons-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 10px 18px;
+  border-top: 1px solid var(--line);
+}
+
+.addons-foot .spacer {
+  flex: 1;
+}
+
+.addon-consent {
+  padding: 22px 26px;
+}
+
+.addon-consent h4 {
+  margin: 0 0 2px;
+  font-size: 17px;
+}
+
+.consent-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 18px 0 8px;
+  font-weight: 700;
+}
+
+.consent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.consent-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.consent-list li > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.consent-list li.warn {
+  border-color: #ecd9a6;
+  background: var(--warn-soft);
+}
+
+.consent-list li.warn > svg {
+  color: var(--warn);
+}
+
+.consent-list li span:first-of-type {
+  flex: 1;
+}
+
+.consent-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}

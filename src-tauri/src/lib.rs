@@ -10,6 +10,7 @@
 //! - `craft`: anteprima degli allegati con le app ArtCraft e loro installazione.
 //! - `interno`: chat interna con il server Postamon interno.
 //! - `update`: aggiornamenti automatici dal server interno.
+//! - `addons`: add-on installati dal catalogo firmato, serviti isolati.
 //! - `commands`: i comandi chiamati dall'interfaccia.
 
 use std::path::PathBuf;
@@ -38,6 +39,7 @@ macro_rules! with_imap {
 }
 
 mod accounts;
+mod addons;
 mod commands;
 mod craft;
 mod imap;
@@ -55,6 +57,7 @@ pub struct AppState {
     pub craft: craft::Craft,
     pub interno: Arc<interno::Interno>,
     pub updates: update::Updates,
+    pub addons: addons::Addons,
     /// Cartella dove si scrivono gli allegati aperti con un altro programma.
     pub temp_dir: PathBuf,
 }
@@ -90,6 +93,7 @@ pub fn run() {
                 craft: craft::Craft::start(dir.join("craft"))?,
                 interno: Arc::new(interno::Interno::load(dir.join("interno.json"))),
                 updates: update::Updates::default(),
+                addons: addons::Addons::start(dir.join("addons"))?,
                 temp_dir: std::env::temp_dir().join("Postamon"),
             });
             app.manage(state.clone());
@@ -133,6 +137,14 @@ pub fn run() {
             commands::interno_file_open,
             commands::update_status,
             commands::update_install,
+            commands::addons_installed,
+            commands::addons_catalog,
+            commands::addon_install,
+            commands::addon_uninstall,
+            commands::addon_set_enabled,
+            commands::addon_dev_add,
+            commands::addon_message,
+            commands::addon_storage,
         ])
         .run(tauri::generate_context!())
         .expect("avvio di Postamon non riuscito");

@@ -123,9 +123,13 @@ POSTAMON_DATA_DIR=<cartella> npm run tauri dev      # (dalla radice) l'app su qu
 | `src-tauri/src/accounts.rs` | caselle e password |
 | `src-tauri/src/sync.rs` | controllo periodico e notifiche |
 | `src-tauri/src/update.rs` | aggiornamenti automatici dal server della chat |
+| `src-tauri/src/addons.rs` | add-on: catalogo firmato, installazione, server locale isolato, dati |
 | `scripts/pubblica.ps1` | installer firmato e pubblicazione di una versione |
 | `src-tauri/src/commands.rs` | comandi chiamati dall'interfaccia |
 | `src/` | interfaccia React |
+| `addons/` | sorgenti degli add-on (non entrano nella build) |
+| `sdk/` | libreria e stile serviti agli add-on |
+| `scripts/addons.mjs`, `scripts/pubblica-addon.ps1` | controllo, pacchetti e pubblicazione del catalogo degli add-on |
 
 ## Chat interna
 
@@ -173,6 +177,30 @@ ssh -i <chiave> <utente>@<server> 'cd postamon-interno && mv postamon-interno.nu
 Prova del client contro il server vero, con due utenti di prova: `POSTAMON_INTERNO_SERVER=<server>
 POSTAMON_INTERNO_U1=<utente 1> POSTAMON_INTERNO_P1=… POSTAMON_INTERNO_U2=<utente 2> POSTAMON_INTERNO_P2=…
 cargo test live_server_round_trip` (in `src-tauri`).
+
+## Add-on
+
+Funzioni in più che ognuno installa solo se gli servono, dal **marketplace** (icona del puzzle in basso nella
+colonna delle caselle): un pulsante sul messaggio aperto, una vista nella barra laterale. Chi vuole scriverne uno
+segue [ADDONS.md](ADDONS.md) e propone una pull request; come contribuire in generale: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+- **Il codice resta nel repo** (`addons/<id>/`) e non entra nella build. Dopo il merge,
+  `scripts\pubblica-addon.ps1` lo impacchetta nel catalogo (release `addons` del repo su GitHub), firmato con
+  `~\.tauri\postamon-addons.key`, una chiave diversa da quella degli aggiornamenti.
+- **Installazione**: Postamon verifica la firma del catalogo e lo SHA-256 del pacchetto, mostra i permessi e
+  installa in `%APPDATA%\it.dimensionesalotto.postamon\addons\<id>\`. Disattivare nasconde l'add-on, disinstallare
+  lo cancella con i suoi dati.
+- **Isolamento**: le pagine si servono da un server su 127.0.0.1 in un riquadro senza origine propria
+  (`sandbox="allow-scripts allow-forms"`), con una Content-Security-Policy che vieta ogni collegamento esterno
+  salvo i domini dichiarati con `network:`. L'add-on parla con Postamon solo con `postMessage`
+  (`sdk/postamon-addon.js`) e ottiene solo ciò che i permessi concedono; la pagina principale impedisce ai
+  riquadri di navigare fuori da 127.0.0.1. Provato in WebView2: rete, interfaccia, localStorage e comandi di
+  Tauri non sono raggiungibili dal riquadro.
+- **Controllo automatico**: `node scripts/addons.mjs check` (lo esegue GitHub su ogni pull request, con le regole
+  prese da `main`).
+
+`POSTAMON_ADDONS_URL=<cartella con addons.json>/` fa leggere a Postamon un catalogo diverso da quello pubblicato,
+per le prove (`scripts\pubblica-addon.ps1 -SenzaInvio` lo prepara in `dist-addons\`).
 
 ## Prossime fasi
 

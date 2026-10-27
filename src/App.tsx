@@ -14,6 +14,7 @@ import {
   type ChatStatusFor,
   type CraftStatus,
   type Folder,
+  type InstalledAddon,
   type MailUpdated,
   type MessagePage,
   type Opened,
@@ -23,6 +24,16 @@ import {
   type WebProgress,
 } from "./api";
 import { AccountForm } from "./components/AccountForm";
+import {
+  AddonFrame,
+  AddonIcon,
+  AddonPanel,
+  addonEntries,
+  type AddonDraft,
+  type AddonEntry,
+  type AddonMessageRef,
+} from "./components/AddonFrame";
+import { AddonsDialog } from "./components/AddonsDialog";
 import { ArtCraftSetup } from "./components/ArtCraftSetup";
 import { ChatView } from "./components/ChatView";
 import { Compose, type ComposeInit } from "./components/Compose";
@@ -38,6 +49,8 @@ const PAGE = 200;
 
 type Current = { accountId: string; folder: string };
 type ToastKind = "info" | "warn" | "error";
+/** Cosa mostra lo spazio di lavoro: la posta, la chat o la vista di un add-on. */
+type View = "mail" | "chat" | `addon:${string}`;
 
 export default function App() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -58,11 +71,17 @@ export default function App() {
   const [toast, setToast] = useState<{ text: string; kind: ToastKind } | null>(null);
   const [craftStatus, setCraftStatus] = useState<CraftStatus | null>(null);
   const [craftSetup, setCraftSetup] = useState(false);
-  const [view, setView] = useState<"mail" | "chat">("mail");
+  const [view, setView] = useState<View>("mail");
   // Chat da leggere per casella (ogni casella è uno spazio di lavoro con la sua chat).
   const [chatUnread, setChatUnread] = useState<Record<string, number>>({});
   // Dove si era rimasti in ogni spazio di lavoro, per tornarci.
-  const places = useRef<Record<string, { folder: string; view: "mail" | "chat" }>>({});
+  const places = useRef<Record<string, { folder: string; view: View }>>({});
+  const [addons, setAddons] = useState<InstalledAddon[]>([]);
+  const [addonsOpen, setAddonsOpen] = useState(false);
+  // Add-on aperto dal pulsante sul messaggio, legato a quel messaggio.
+  const [addonPanel, setAddonPanel] = useState<{ entry: AddonEntry; message: AddonMessageRef } | null>(null);
+  // Cresce a ogni "Ricarica" degli add-on in sviluppo: le loro pagine ripartono.
+  const [addonReload, setAddonReload] = useState(0);
   const [viewer, setViewer] = useState<ViewerState | null>(null);
   // Nuova versione di Postamon già scaricata, in attesa del riavvio.
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
@@ -193,12 +212,28 @@ export default function App() {
   const switchWorkspace = useCallback(
     (accountId: string) => {
       if (currentRef.current?.accountId === accountId) return;
-      const place = places.current[accountId] ?? { folder: "INBOX", view: "mail" as const };
+      const place = places.current[accountId] ?? { folder: "INBOX", view: "mail" as View };
       setView(place.view);
       selectFolder(accountId, place.folder);
     },
     [selectFolder],
   );
+
+  const reloadAddons = useCallback(async (frames = false) => {
+    try {
+      setAddons(await api.addonsInstalled());
+    } catch {
+      // si tiene l'elenco di prima
+    }
+    if (frames) setAddonReload((n) => n + 1);
+  }, []);
+
+  useEffect(() => {
+    void reloadAddons();
+  }, [reloadAddons]);
+
+  const closeAddonPanel = useCallback(() => setAddonPanel(null), []);
+  const closeAddons = useCallback(() => setAddonsOpen(false), []);
 
   // Aggiornamenti: il motore li scarica in sottofondo e avvisa quando sono pronti.
   useEffect(() => {
@@ -303,7 +338,7 @@ export default function App() {
   // Scorciatoie: Ctrl+N nuovo messaggio, F5 aggiorna.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (compose || addingAccount || signatureFor) return;
+      if (compose || addingAccount || signatureFor || addonsOpen || addonPanel) return;
       if (e.ctrlKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
         newMessage();
@@ -314,7 +349,43 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [compose, addingAccount, signatureFor, newMessage, refresh]);
+  }, [compose, addingAccount, signatureFor, addonsOpen, addonPanel, newMessage, refresh]);
+
+  // ---- richieste degli add-on ----
+  // Funzioni normali, non memorizzate: il riquadro dell'add-on legge sempre le
+  // ultime, quindi vedono il messaggio in scrittura di adesso.
+
+  const composeFromAddon = (draft: AddonDraft) => {
+    if (compose) throw new Error("C'è già un messaggio in scrittura: chiudilo prima");
+    if (!accounts?.length) throw new Error("Nessuna casella configurata");
+    const account = accounts.find((a) => a.id === currentRef.current?.accountId) ?? accounts[0];
+    setCompose({
+      accountId: account.id,
+      to: draft.to,
+      cc: draft.cc,
+      bcc: "",
+      subject: draft.subject,
+      body: account.signature ? `${draft.body}\n\n${account.signature}` : draft.body,
+      inReplyTo: null,
+      references: null,
+      reply: null,
+      forward: null,
+      forwardAttachments: [],
+    });
+  };
+
+  const replyFromAddon = async (message: AddonMessageRef, body: string, all: boolean) => {
+    if (compose) throw new Error("C'è già un messaggio in scrittura: chiudilo prima");
+    const data = await api.composeFrom(message.accountId, message.folder, message.uid, all ? "replyAll" : "reply");
+    // Il testo dell'add-on va sopra la firma e la citazione.
+    setCompose({ ...data, bcc: "", body: body.trim() ? body.trimEnd() + data.body : data.body });
+  };
+
+  const openAddonButton = (entry: AddonEntry) => {
+    const cur = currentRef.current;
+    if (!cur || selectedUid === null) return;
+    setAddonPanel({ entry, message: { accountId: cur.accountId, folder: cur.folder, uid: selectedUid } });
+  };
 
   const selected = page?.items.find((m) => m.uid === selectedUid) ?? null;
 
@@ -533,6 +604,10 @@ export default function App() {
   const workspaceSyncing = syncing[currentAccount.id] ?? false;
   const unseen = currentFolder?.unseen ?? 0;
   const showRecipient = currentFolder?.role === "sent" || currentFolder?.role === "drafts";
+  const addonButtons = addonEntries(addons, "message-button");
+  const addonViews = addonEntries(addons, "sidebar-view");
+  // Vista di add-on aperta; se nel frattempo è stato disattivato si torna alla posta.
+  const addonView = view.startsWith("addon:") ? addonViews.find((e) => `addon:${e.key}` === view) : undefined;
   // Numero sull'icona di ogni casella: posta in arrivo da leggere più chat.
   const badges = Object.fromEntries(
     accounts.map((a) => [
@@ -549,6 +624,7 @@ export default function App() {
         badges={badges}
         onSelect={switchWorkspace}
         onAdd={() => setAddingAccount(true)}
+        onAddons={() => setAddonsOpen(true)}
       />
       <header className="topbar">
         <button className="btn btn-primary" onClick={() => newMessage()}>
@@ -595,14 +671,45 @@ export default function App() {
           chatActive={view === "chat"}
           chatUnread={chatUnread[currentAccount.id] ?? 0}
           onOpenChat={() => setView("chat")}
+          addonViews={addonViews}
+          activeAddon={addonView?.key ?? null}
+          onOpenAddon={(key) => setView(`addon:${key}`)}
         />
         {view === "chat" ? (
           <ChatView
             key={currentAccount.id}
             account={currentAccount}
-            dropEnabled={!compose && !viewer}
+            dropEnabled={!compose && !viewer && !addonsOpen && !addonPanel}
             onToast={showToast}
           />
+        ) : addonView ? (
+          <section className="sheet addon-view">
+            <div className="addon-view-head">
+              <AddonIcon addon={addonView.addon} size={18} />
+              <h2>{addonView.hook.title}</h2>
+              <span className="addon-by">
+                {addonView.addon.manifest?.name !== addonView.hook.title && addonView.addon.manifest?.name}
+              </span>
+              {addonView.addon.dev && (
+                <button className="btn btn-small" onClick={() => void reloadAddons(true)}>
+                  <RotateCw />
+                  Ricarica
+                </button>
+              )}
+            </div>
+            <AddonFrame
+              key={`${addonView.key}:${addonReload}`}
+              addon={addonView.addon}
+              hook={addonView.hook}
+              message={null}
+              onCompose={composeFromAddon}
+              onReply={async () => {
+                throw new Error("Qui non c'è un messaggio a cui rispondere");
+              }}
+              onToast={showToast}
+              onClose={() => setView("mail")}
+            />
+          </section>
         ) : (
           <>
         <section className="sheet">
@@ -633,11 +740,37 @@ export default function App() {
             onSaveAttachment={(a) => void saveAttachment(a)}
             onLink={(url) => void openUrl(url)}
             onMailto={(address) => newMessage(address)}
+            addonButtons={addonButtons}
+            onAddonButton={openAddonButton}
           />
         </section>
           </>
         )}
       </div>
+
+      {addonPanel && (
+        <AddonPanel
+          addon={addonPanel.entry.addon}
+          hook={addonPanel.entry.hook}
+          message={addonPanel.message}
+          reloadKey={addonReload}
+          onReload={() => void reloadAddons(true)}
+          onCompose={(draft) => {
+            composeFromAddon(draft);
+            setAddonPanel(null);
+          }}
+          onReply={async (body, all) => {
+            await replyFromAddon(addonPanel.message, body, all);
+            setAddonPanel(null);
+          }}
+          onToast={showToast}
+          onClose={closeAddonPanel}
+        />
+      )}
+
+      {addonsOpen && (
+        <AddonsDialog installed={addons} onChanged={reloadAddons} onToast={showToast} onClose={closeAddons} />
+      )}
 
       {compose && (
         // Ogni spazio di lavoro scrive dalla sua casella.

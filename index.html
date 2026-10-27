@@ -2,7 +2,10 @@
 <html lang="it">
   <head>
     <meta charset="UTF-8" />
-    
+    <!-- I riquadri (email, anteprime ArtCraft, add-on) possono mostrare solo
+         l'interfaccia stessa o i server locali di Postamon: un add-on che prova
+         a portare il riquadro su un sito esterno viene fermato. -->
+    <meta http-equiv="Content-Security-Policy" content="frame-src 'self' http://127.0.0.1:*" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Postamon</title>
   </head>

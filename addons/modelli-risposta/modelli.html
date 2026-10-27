@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <title>Modelli di risposta</title>
+    <link rel="stylesheet" href="_postamon/postamon.css" />
+    <link rel="stylesheet" href="stile.css" />
+  </head>
+  <body>
+    <div class="testata">
+      <h1>Modelli di risposta</h1>
+      <button class="btn btn-primary" id="nuovo">+ Nuovo modello</button>
+    </div>
+    <div class="scelta">
+      <ul class="elenco" id="elenco"></ul>
+      <form class="stack" id="modulo" hidden>
+        <input class="input" id="titolo" placeholder="Titolo del modello" maxlength="80" required />
+        <div class="campo-testo">
+          <textarea class="input testo" id="testo" placeholder="Testo della risposta" required></textarea>
+          <button type="button" class="aiuto" id="aiuto" aria-label="Come scrivere un modello" aria-expanded="false">?</button>
+          <div class="suggerimento" id="suggerimento" hidden>
+            <b>{nome}</b> diventa il nome di chi ha scritto, <b>{oggetto}</b> l'oggetto del messaggio. La firma
+            della casella si aggiunge da sola sotto il testo.
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary" type="submit">Salva</button>
+          <button class="btn btn-danger" type="button" id="elimina">Elimina</button>
+        </div>
+      </form>
+    </div>
+
+    <script src="_postamon/sdk.js"></script>
+    <script src="comune.js"></script>
+    <script src="modelli.js"></script>
+  </body>
+</html>

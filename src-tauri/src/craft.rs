@@ -715,7 +715,7 @@ fn status_response(status: u16) -> Resp {
     tiny_http::Response::new(status.into(), vec![], reader, Some(len), None)
 }
 
-fn mime_for(path: &Path) -> &'static str {
+pub(crate) fn mime_for(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
         "html" => "text/html; charset=utf-8",
         "js" | "mjs" => "text/javascript",
@@ -723,8 +723,12 @@ fn mime_for(path: &Path) -> &'static str {
         "css" => "text/css",
         "json" => "application/json",
         "txt" => "text/plain; charset=utf-8",
+        "md" => "text/markdown; charset=utf-8",
         "svg" => "image/svg+xml",
         "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
         "ico" => "image/x-icon",
         "woff2" => "font/woff2",
         "woff" => "font/woff",

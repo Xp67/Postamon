@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <title>Rispondi con un modello</title>
+    <link rel="stylesheet" href="_postamon/postamon.css" />
+    <link rel="stylesheet" href="stile.css" />
+  </head>
+  <body>
+    <p class="muted" id="per">Caricamento…</p>
+    <div class="scelta" id="scelta" hidden>
+      <ul class="elenco" id="elenco"></ul>
+      <div class="stack">
+        <textarea class="input testo" id="testo" aria-label="Testo della risposta"></textarea>
+        <div class="row">
+          <button class="btn btn-primary" id="rispondi">Rispondi</button>
+          <button class="btn" id="tutti">Rispondi a tutti</button>
+        </div>
+      </div>
+    </div>
+    <p class="muted" id="vuoto" hidden>Non ci sono modelli: aggiungili da «Modelli di risposta» nella barra laterale.</p>
+
+    <script src="_postamon/sdk.js"></script>
+    <script src="comune.js"></script>
+    <script src="rispondi.js"></script>
+  </body>
+</html>

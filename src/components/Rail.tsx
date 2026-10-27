@@ -1,4 +1,4 @@
-import { Mail, Plus } from "lucide-react";
+import { Mail, Plus, Puzzle } from "lucide-react";
 import type { Account } from "../api";
 import { avatarHue, initials } from "../format";
 
@@ -9,10 +9,11 @@ interface Props {
   badges: Record<string, number>;
   onSelect: (accountId: string) => void;
   onAdd: () => void;
+  onAddons: () => void;
 }
 
 /** Colonna degli spazi di lavoro: una casella per icona. */
-export function Rail({ accounts, current, badges, onSelect, onAdd }: Props) {
+export function Rail({ accounts, current, badges, onSelect, onAdd, onAddons }: Props) {
   return (
     <nav className="rail" aria-label="Caselle">
       <div className="rail-brand" title="Postamon">
@@ -41,6 +42,9 @@ export function Rail({ accounts, current, badges, onSelect, onAdd }: Props) {
       </div>
       <button className="rail-item rail-add" title="Aggiungi casella" aria-label="Aggiungi casella" onClick={onAdd}>
         <Plus />
+      </button>
+      <button className="rail-item rail-addons" title="Add-on" aria-label="Add-on" onClick={onAddons}>
+        <Puzzle />
       </button>
     </nav>
   );

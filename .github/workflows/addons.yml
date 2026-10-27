@@ -1,0 +1,57 @@
+name: Add-on
+
+on:
+  pull_request:
+    paths:
+      - "addons/**"
+      - "sdk/**"
+      - "scripts/addons.mjs"
+      - ".github/workflows/addons.yml"
+  push:
+    branches: [main]
+    paths:
+      - "addons/**"
+      - "sdk/**"
+      - "scripts/addons.mjs"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Controllo degli add-on
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Su una pull request le regole si prendono da main, non dalla pull
+      # request stessa: chi propone un add-on non può allentare il controllo
+      # modificando lo script. Se main non ha ancora lo script, si usa quello
+      # della pull request (che il revisore legge comunque).
+      - name: Script di controllo
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+            && git fetch --depth=1 origin "${{ github.base_ref }}" \
+            && git show FETCH_HEAD:scripts/addons.mjs > "$RUNNER_TEMP/addons.mjs"; then
+            echo "Regole di ${{ github.base_ref }}"
+          else
+            cp scripts/addons.mjs "$RUNNER_TEMP/addons.mjs"
+            echo "Regole di questo commit"
+          fi
+
+      - name: Controllo
+        env:
+          POSTAMON_ADDONS_DIR: ${{ github.workspace }}/addons
+        run: node "$RUNNER_TEMP/addons.mjs" check
+
+      - name: Lo script di controllo è cambiato
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --depth=1 origin "${{ github.base_ref }}"
+          if ! git diff --quiet FETCH_HEAD -- scripts/addons.mjs; then
+            echo "::warning file=scripts/addons.mjs::Questa pull request modifica le regole di controllo degli add-on: va rivista a parte."
+          fi

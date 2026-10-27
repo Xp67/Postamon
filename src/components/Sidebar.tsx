@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import type { Account, Folder, FolderRole } from "../api";
+import { AddonIcon, type AddonEntry } from "./AddonFrame";
 
 const ROLE_ICONS: Record<FolderRole, typeof Inbox> = {
   inbox: Inbox,
@@ -39,6 +40,11 @@ interface Props {
   onOpenChat: () => void;
   onEditSignature: (account: Account) => void;
   onRemoveAccount: (account: Account) => void;
+  /** Viste degli add-on nella barra laterale. */
+  addonViews: AddonEntry[];
+  /** Chiave della vista aperta, se è un add-on. */
+  activeAddon: string | null;
+  onOpenAddon: (key: string) => void;
 }
 
 /** Barra laterale dello spazio di lavoro di una casella: chat e cartelle. */
@@ -54,6 +60,9 @@ export function Sidebar({
   onOpenChat,
   onEditSignature,
   onRemoveAccount,
+  addonViews,
+  activeAddon,
+  onOpenAddon,
 }: Props) {
   const [menu, setMenu] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -124,10 +133,27 @@ export function Sidebar({
         {chatUnread > 0 && <span className="count">{chatUnread}</span>}
       </button>
 
+      {addonViews.length > 0 && (
+        <>
+          <div className="sidebar-section">Add-on</div>
+          {addonViews.map((entry) => (
+            <button
+              key={entry.key}
+              className={`folder ${activeAddon === entry.key ? "active" : ""}`}
+              onClick={() => onOpenAddon(entry.key)}
+              title={entry.hook.title}
+            >
+              <AddonIcon addon={entry.addon} />
+              <span className="folder-label">{entry.hook.title}</span>
+            </button>
+          ))}
+        </>
+      )}
+
       <div className="sidebar-section">Posta</div>
       {folders.map((f) => {
         const Icon = (f.role && ROLE_ICONS[f.role]) || FolderIcon;
-        const active = !chatActive && folder === f.name;
+        const active = !chatActive && activeAddon === null && folder === f.name;
         const showCount = f.unseen > 0 && f.role !== "sent" && f.role !== "trash" && f.role !== "junk";
         return (
           <button

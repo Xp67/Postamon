@@ -1,0 +1,84 @@
+.testata {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.testata h1 {
+  margin: 0;
+}
+
+.scelta {
+  display: grid;
+  grid-template-columns: minmax(160px, 240px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.elenco {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.voce {
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.voce:hover {
+  background: var(--line-soft);
+}
+
+.voce.attivo {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+textarea.testo {
+  min-height: 240px;
+}
+
+.campo-testo {
+  position: relative;
+}
+
+.aiuto {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--sheet);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.suggerimento {
+  position: absolute;
+  top: 36px;
+  right: 8px;
+  max-width: 300px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--sheet);
+  box-shadow: 0 8px 24px rgba(23, 32, 42, 0.16);
+  font-size: 13px;
+}

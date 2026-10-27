@@ -247,6 +247,65 @@ export interface UpdateStatus {
   ready: UpdateInfo | null;
 }
 
+// ---- add-on ----
+
+export type AddonHookType = "message-button" | "sidebar-view";
+
+export interface AddonHook {
+  type: AddonHookType;
+  title: string;
+  page: string;
+}
+
+export interface AddonManifest {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  api: number;
+  minPostamon?: string;
+  icon?: string;
+  permissions: string[];
+  hooks: AddonHook[];
+}
+
+export interface InstalledAddon {
+  id: string;
+  version: string;
+  enabled: boolean;
+  dev: boolean;
+  granted: string[];
+  manifest: AddonManifest | null;
+  /** Cartella del pacchetto sul server locale degli add-on, con la barra finale. */
+  baseUrl: string;
+  devPath: string | null;
+  error: string | null;
+}
+
+export interface CatalogItem extends AddonManifest {
+  file: string;
+  size: number;
+  sha256: string;
+  installedVersion: string | null;
+  dev: boolean;
+  update: boolean;
+  incompatible: string | null;
+  newPermissions: string[];
+}
+
+/** Messaggio come lo legge un add-on. */
+export interface AddonMessage {
+  subject: string;
+  from: { name: string; address: string };
+  to: { name: string; address: string }[];
+  cc: { name: string; address: string }[];
+  date: number | null;
+  dateText: string;
+  text: string;
+  attachments: Attachment[];
+}
+
 export const api = {
   accounts: () => invoke<Account[]>("accounts_list"),
   addAccount: (input: NewAccount) => invoke<Account>("account_add", { input }),
@@ -312,7 +371,28 @@ export const api = {
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   /** Chiude Postamon: l'installer lo riapre aggiornato. */
   updateInstall: () => invoke<void>("update_install"),
+
+  addonsInstalled: () => invoke<InstalledAddon[]>("addons_installed"),
+  addonsCatalog: () => invoke<CatalogItem[]>("addons_catalog"),
+  /** `permissions`: quelli mostrati all'utente; se il catalogo ne chiede altri non si installa. */
+  addonInstall: (id: string, permissions: string[]) => invoke<void>("addon_install", { id, permissions }),
+  addonUninstall: (id: string) => invoke<void>("addon_uninstall", { id }),
+  addonSetEnabled: (id: string, enabled: boolean) => invoke<void>("addon_set_enabled", { id, enabled }),
+  addonDevAdd: (path: string) => invoke<string>("addon_dev_add", { path }),
+  addonMessage: (addonId: string, accountId: string, folder: string, uid: number) =>
+    invoke<AddonMessage>("addon_message", { addonId, accountId, folder, uid }),
+  addonStorage: (addonId: string, op: "get" | "set" | "remove" | "keys", key?: string, value?: unknown) =>
+    invoke<unknown>("addon_storage", { addonId, op, key: key ?? null, value: value ?? null }),
 };
+
+/** Cosa può fare un add-on con un permesso, in parole semplici. */
+export function permissionText(p: string): { text: string; warn: boolean } {
+  if (p === "message.read")
+    return { text: "Legge il messaggio aperto: mittente, destinatari, oggetto, testo e nomi degli allegati", warn: false };
+  if (p === "compose") return { text: "Prepara messaggi e risposte, che invii sempre tu", warn: false };
+  if (p.startsWith("network:")) return { text: `Si collega a internet, solo a ${p.slice(8)}`, warn: true };
+  return { text: p, warn: true };
+}
 
 /** Gli errori del motore arrivano come stringhe già pronte da mostrare. */
 export function errorText(e: unknown): string {

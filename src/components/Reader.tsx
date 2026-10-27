@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { Attachment, Opened, Summary } from "../api";
 import { avatarHue, fileSize, fullDate, initials, senderLabel } from "../format";
+import { AddonIcon, type AddonEntry } from "./AddonFrame";
 import { Help } from "./Help";
 
 interface Props {
@@ -35,6 +36,9 @@ interface Props {
   onSaveAttachment: (a: Attachment) => void;
   onLink: (url: string) => void;
   onMailto: (address: string) => void;
+  /** Pulsanti degli add-on sul messaggio aperto. */
+  addonButtons: AddonEntry[];
+  onAddonButton: (entry: AddonEntry) => void;
 }
 
 function attachmentIcon(a: Attachment) {
@@ -147,6 +151,17 @@ export function Reader(props: Props) {
           <Forward />
           Inoltra
         </button>
+        {props.addonButtons.map((entry) => (
+          <button
+            key={entry.key}
+            className="btn"
+            onClick={() => props.onAddonButton(entry)}
+            title={`Add-on ${entry.addon.manifest?.name ?? entry.addon.id}`}
+          >
+            <AddonIcon addon={entry.addon} />
+            {entry.hook.title}
+          </button>
+        ))}
         <span className="spacer" />
         <button
           className="btn btn-ghost icon-btn"

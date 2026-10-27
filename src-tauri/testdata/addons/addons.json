@@ -1,0 +1,33 @@
+{
+  "generated": "2026-10-27T09:26:08.775Z",
+  "addons": [
+    {
+      "id": "modelli-risposta",
+      "name": "Modelli di risposta",
+      "version": "1.0.0",
+      "description": "Risposte pronte da usare con un clic: scrivi i modelli una volta, poi rispondi ai messaggi con il nome del mittente già inserito.",
+      "author": "Postamon",
+      "api": 1,
+      "icon": "icon.svg",
+      "permissions": [
+        "message.read",
+        "compose"
+      ],
+      "hooks": [
+        {
+          "type": "message-button",
+          "title": "Rispondi con un modello",
+          "page": "rispondi.html"
+        },
+        {
+          "type": "sidebar-view",
+          "title": "Modelli di risposta",
+          "page": "modelli.html"
+        }
+      ],
+      "file": "modelli-risposta-1.0.0.zip",
+      "size": 11186,
+      "sha256": "e8c678be5e749102f2c1319d3d9cd1690a9645b35cf6658cee3c06cb9b82a089"
+    }
+  ]
+}

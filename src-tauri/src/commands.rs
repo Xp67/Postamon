@@ -13,7 +13,7 @@ use crate::AppState;
 use crate::accounts::{self, Account};
 use crate::render::{self, Attachment, Rendered, format_person};
 use crate::store::{Flag, Folder, Summary};
-use crate::{craft, imap, interno, smtp, sync, update};
+use crate::{addons, craft, imap, interno, smtp, sync, update};
 
 type Res<T> = std::result::Result<T, String>;
 type St<'a> = State<'a, Arc<AppState>>;
@@ -1001,6 +1001,118 @@ pub fn update_status(app: AppHandle, state: St<'_>) -> UpdateStatus {
 #[tauri::command]
 pub fn update_install(state: St<'_>) -> Res<()> {
     state.updates.install().map_err(fail)
+}
+
+// ---- add-on ----
+//
+// Le richieste degli add-on arrivano dall'interfaccia, che conosce il riquadro
+// che le manda e il messaggio a cui è legato: l'add-on non sceglie quale
+// messaggio leggere. I permessi si controllano qui (lettura, dati) e
+// nell'interfaccia per le azioni che restano a lei (scrittura, avvisi).
+
+#[tauri::command]
+pub fn addons_installed(state: St<'_>) -> Vec<addons::InstalledAddon> {
+    state.addons.installed()
+}
+
+#[tauri::command]
+pub async fn addons_catalog(state: St<'_>) -> Res<Vec<addons::CatalogItem>> {
+    state.addons.catalog_items().await.map_err(fail)
+}
+
+#[tauri::command]
+pub async fn addon_install(state: St<'_>, id: String, permissions: Vec<String>) -> Res<()> {
+    state.addons.install(&id, &permissions).await.map_err(fail)
+}
+
+#[tauri::command]
+pub fn addon_uninstall(state: St<'_>, id: String) -> Res<()> {
+    state.addons.uninstall(&id).map_err(fail)
+}
+
+#[tauri::command]
+pub fn addon_set_enabled(state: St<'_>, id: String, enabled: bool) -> Res<()> {
+    state.addons.set_enabled(&id, enabled).map_err(fail)
+}
+
+#[tauri::command]
+pub fn addon_dev_add(state: St<'_>, path: String) -> Res<String> {
+    state.addons.add_dev(Path::new(&path)).map_err(fail)
+}
+
+#[derive(Serialize)]
+pub struct AddonPerson {
+    name: String,
+    address: String,
+}
+
+impl From<(String, String)> for AddonPerson {
+    fn from((name, address): (String, String)) -> Self {
+        Self { name, address }
+    }
+}
+
+/// Il messaggio come lo legge un add-on con il permesso `message.read`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddonMessage {
+    subject: String,
+    from: AddonPerson,
+    to: Vec<AddonPerson>,
+    cc: Vec<AddonPerson>,
+    date: Option<i64>,
+    date_text: String,
+    text: String,
+    attachments: Vec<Attachment>,
+}
+
+#[tauri::command]
+pub async fn addon_message(
+    state: St<'_>,
+    addon_id: String,
+    account_id: String,
+    folder: String,
+    uid: u32,
+) -> Res<AddonMessage> {
+    let run = async {
+        state.addons.require(&addon_id, Some("message.read"))?;
+        let acc = state.accounts.get(&account_id)?;
+        let raw = load_raw(&state, &acc, &folder, uid).await?;
+        let o = render::original(&raw)?;
+        Ok(AddonMessage {
+            subject: o.subject,
+            from: o.from.into(),
+            to: o.to.into_iter().map(Into::into).collect(),
+            cc: o.cc.into_iter().map(Into::into).collect(),
+            date: state.store.summary(&acc.id, &folder, uid)?.map(|s| s.date),
+            date_text: o.date,
+            text: o.text,
+            attachments: render::attachment_list(&raw)?,
+        })
+    };
+    run.await.map_err(fail)
+}
+
+#[tauri::command]
+pub fn addon_storage(
+    state: St<'_>,
+    addon_id: String,
+    op: String,
+    key: Option<String>,
+    value: Option<serde_json::Value>,
+) -> Res<serde_json::Value> {
+    let key = || key.clone().context("Manca la chiave dei dati");
+    let run = || -> Result<serde_json::Value> {
+        let op = match op.as_str() {
+            "get" => addons::StorageOp::Get(key()?),
+            "set" => addons::StorageOp::Set(key()?, value.clone().unwrap_or(serde_json::Value::Null)),
+            "remove" => addons::StorageOp::Remove(key()?),
+            "keys" => addons::StorageOp::Keys,
+            other => bail!("Operazione sui dati sconosciuta: {other}"),
+        };
+        state.addons.storage(&addon_id, op)
+    };
+    run().map_err(fail)
 }
 
 #[cfg(test)]
