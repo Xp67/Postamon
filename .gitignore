@@ -1,4 +1,4 @@
-# Logs
+# Log
 logs
 *.log
 npm-debug.log*
@@ -7,21 +7,54 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# Librerie e dipendenze: si scaricano con npm install e cargo build, nel repo
+# restano solo package-lock.json e Cargo.lock. Valgono in ogni cartella,
+# anche dentro addons/.
+node_modules/
+.pnpm-store/
+.yarn/
+bower_components/
+jspm_packages/
+web_modules/
+vendor/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.zig-cache/
+zig-cache/
 
-# Rust (app e server della chat)
+# Compilazione (app, server della chat, catalogo degli add-on)
 target/
+dist/
+dist-ssr/
+dist-addons/
+
+# Librerie e programmi compilati, ovunque si trovino
+*.dll
+*.so
+*.so.*
+*.dylib
+*.lib
+*.a
+*.rlib
+*.exp
+*.pdb
+*.ilk
+*.obj
+*.o
+*.node
+*.exe
+*.msi
 
 # Segreti e configurazioni locali
 .env
 .env.*
 *.key
+*.local
 *.local.*
 
-# Editor directories and files
+# Editor
 .vscode/*
 !.vscode/extensions.json
 .idea
