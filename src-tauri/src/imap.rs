@@ -490,17 +490,23 @@ pub async fn set_flag(c: &mut Conn, folder: &str, uid: u32, flag: &str, on: bool
 
 /// Sposta nel cestino; se il messaggio è già nel cestino lo elimina davvero.
 pub async fn delete(c: &mut Conn, folder: &str, uid: u32, trash: Option<&str>) -> Result<()> {
-    ensure_selected(c, folder).await?;
     match trash {
-        Some(trash) if trash != folder => {
-            if c.has("MOVE") {
-                c.session.uid_mv(uid.to_string(), trash).await?;
-            } else {
-                c.session.uid_copy(uid.to_string(), trash).await?;
-                expunge_one(c, uid).await?;
-            }
+        Some(trash) if trash != folder => move_to(c, folder, uid, trash).await,
+        _ => {
+            ensure_selected(c, folder).await?;
+            expunge_one(c, uid).await
         }
-        _ => expunge_one(c, uid).await?,
+    }
+}
+
+/// Sposta un messaggio in un'altra cartella della stessa casella.
+pub async fn move_to(c: &mut Conn, folder: &str, uid: u32, dest: &str) -> Result<()> {
+    ensure_selected(c, folder).await?;
+    if c.has("MOVE") {
+        c.session.uid_mv(uid.to_string(), dest).await?;
+    } else {
+        c.session.uid_copy(uid.to_string(), dest).await?;
+        expunge_one(c, uid).await?;
     }
     Ok(())
 }

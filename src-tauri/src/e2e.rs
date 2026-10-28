@@ -24,6 +24,8 @@ fn account() -> Account {
         imap_port: 3993,
         smtp_host: "127.0.0.1".into(),
         smtp_port: 3465,
+        signature_new: None,
+        signature_reply: None,
         signature: String::new(),
         accept_invalid_certs: true,
     }
@@ -46,6 +48,8 @@ async fn send_sync_open_and_move() {
             bcc: "",
             subject: &subject,
             body: "Ciao, il listino è qui: https://dimensionesalotto.it/listino",
+            quote: "",
+            signature: None,
             files: vec![smtp::OutgoingFile {
                 name: "nota.txt".into(),
                 mime: "text/plain".into(),
@@ -344,5 +348,36 @@ fn seed_offline() {
     // Contatori come li darebbe il server.
     store.set_counts(&acc.id, "INBOX", 2, 2).unwrap();
     store.set_counts(&shop.id, "INBOX", 1, 1).unwrap();
+    // Rubrica: Anna è già un contatto (segno nella lista), Luca no (icona per aggiungerlo).
+    // Arredamenti Ferrari ha due domini e Sara le scrive da Gmail; Marta da Gmail per Tappezzeria Ronchi.
+    let contacts = [
+        ("anna.ferrari@arredamentiferrari.it", "Anna Ferrari", "Arredamenti Ferrari", "0331 555 214"),
+        ("paolo.ferrari@arredamentiferrari.it", "Paolo Ferrari", "Arredamenti Ferrari", ""),
+        ("giorgio@ferrari-arredi.com", "Giorgio Ferrari", "Arredamenti Ferrari", ""),
+        ("sara.galli@gmail.com", "Sara Galli", "Arredamenti Ferrari", "339 555 7710"),
+        ("marta.villa@gmail.com", "Marta Villa", "Tappezzeria Ronchi", ""),
+        ("ordini@tappezzeriaronchi.it", "Ufficio ordini", "Tappezzeria Ronchi", ""),
+        ("elena.rizzo@libero.it", "Elena Rizzo", "", ""),
+    ];
+    for (address, name, company, phone) in contacts {
+        let input = crate::store::ContactInput {
+            address: address.into(),
+            name: name.into(),
+            company: company.into(),
+            phone: phone.into(),
+            ..Default::default()
+        };
+        store.save_contact(&acc.id, &input).unwrap();
+    }
+    let ferrari = crate::store::CompanyInput {
+        previous_name: "Arredamenti Ferrari".into(),
+        name: "Arredamenti Ferrari".into(),
+        vat: "IT01234567890".into(),
+        phone: "0331 555 200".into(),
+        address: "Via dei Mobili 12\n20020 Arconate (MI)".into(),
+        website: "https://www.arredamentiferrari.it".into(),
+        ..Default::default()
+    };
+    store.save_company(&acc.id, &ferrari).unwrap();
     eprintln!("archivio di prova pronto in {}", dir.display());
 }

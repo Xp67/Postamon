@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { downloadDir, join } from "@tauri-apps/api/path";
 import { save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { CircleCheck, CircleArrowUp, RefreshCw, RotateCw, SquarePen, TriangleAlert } from "lucide-react";
+import { CircleCheck, CircleArrowUp, RefreshCw, RotateCw, Sparkles, SquarePen, TriangleAlert } from "lucide-react";
 import {
   api,
   errorText,
@@ -12,9 +12,18 @@ import {
   type ChatConversation,
   type ChatEventFor,
   type ChatStatusFor,
+  type ClaudeAnswer,
+  type ClaudeOpen,
+  type ClaudeRequest,
+  type ClaudeStatus,
+  type Contact,
+  type Company,
+  type CompanyInput,
+  type ContactInput,
   type CraftStatus,
   type Folder,
   type InstalledAddon,
+  type Mailto,
   type MailUpdated,
   type MessagePage,
   type Opened,
@@ -24,6 +33,8 @@ import {
   type WebProgress,
 } from "./api";
 import { AccountForm } from "./components/AccountForm";
+import { companyIndex } from "./book";
+import { AddressBook } from "./components/AddressBook";
 import {
   AddonFrame,
   AddonIcon,
@@ -36,21 +47,32 @@ import {
 import { AddonsDialog } from "./components/AddonsDialog";
 import { ArtCraftSetup } from "./components/ArtCraftSetup";
 import { ChatView } from "./components/ChatView";
+import { ClaudePanel } from "./components/ClaudePanel";
+import { ClaudeRequestDialog } from "./components/ClaudeRequestDialog";
 import { Compose, type ComposeInit } from "./components/Compose";
 import { Help } from "./components/Help";
 import { MessageList } from "./components/MessageList";
 import { Rail } from "./components/Rail";
 import { Reader } from "./components/Reader";
-import { SignatureDialog } from "./components/SignatureDialog";
+import { SignaturesDialog } from "./components/SignaturesDialog";
 import { Sidebar } from "./components/Sidebar";
 import { Viewer, type ViewerState } from "./components/Viewer";
 
 const PAGE = 200;
+const CLAUDE_OPEN_KEY = "postamon.claude-open";
+
+function claudeWasOpen(): boolean {
+  try {
+    return localStorage.getItem(CLAUDE_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 type Current = { accountId: string; folder: string };
 type ToastKind = "info" | "warn" | "error";
-/** Cosa mostra lo spazio di lavoro: la posta, la chat o la vista di un add-on. */
-type View = "mail" | "chat" | `addon:${string}`;
+/** Cosa mostra lo spazio di lavoro: la posta, la chat, la rubrica o la vista di un add-on. */
+type View = "mail" | "chat" | "contacts" | `addon:${string}`;
 
 export default function App() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -74,6 +96,10 @@ export default function App() {
   const [view, setView] = useState<View>("mail");
   // Chat da leggere per casella (ogni casella è uno spazio di lavoro con la sua chat).
   const [chatUnread, setChatUnread] = useState<Record<string, number>>({});
+  // Rubrica di ogni casella (persone e schede delle aziende) e contatto aperto nella vista Rubrica.
+  const [books, setBooks] = useState<Record<string, Contact[]>>({});
+  const [companies, setCompanies] = useState<Record<string, Company[]>>({});
+  const [contactSel, setContactSel] = useState<number | null>(null);
   // Dove si era rimasti in ogni spazio di lavoro, per tornarci.
   const places = useRef<Record<string, { folder: string; view: View }>>({});
   const [addons, setAddons] = useState<InstalledAddon[]>([]);
@@ -88,6 +114,14 @@ export default function App() {
   const [updating, setUpdating] = useState(false);
   // Messaggio a cui appartiene l'allegato aperto nell'anteprima.
   const viewerSource = useRef<{ accountId: string; folder: string; uid: number } | null>(null);
+  // Pannello Claude: resta montato dopo la prima apertura, così una risposta
+  // in corso non si perde chiudendolo.
+  const [claudeOpen, setClaudeOpen] = useState(claudeWasOpen);
+  const [claudeMounted, setClaudeMounted] = useState(claudeOpen);
+  const [claudeStatus, setClaudeStatus] = useState<ClaudeStatus | null>(null);
+  // Azioni chieste da Claude che aspettano la conferma.
+  const [claudeRequests, setClaudeRequests] = useState<ClaudeRequest[]>([]);
+  const [answering, setAnswering] = useState(false);
 
   // Le callback degli eventi del motore leggono lo stato attuale da qui.
   const currentRef = useRef<Current | null>(null);
@@ -109,6 +143,82 @@ export default function App() {
       // casella appena tolta
     }
   }, []);
+
+  const loadBook = useCallback(async (accountId: string) => {
+    try {
+      const [list, cards] = await Promise.all([api.addressBook(accountId), api.companies(accountId)]);
+      setBooks((prev) => ({ ...prev, [accountId]: list }));
+      setCompanies((prev) => ({ ...prev, [accountId]: cards }));
+    } catch {
+      // casella appena tolta
+    }
+  }, []);
+
+  const saveContact = useCallback(
+    async (accountId: string, input: ContactInput) => {
+      const { contact: saved, companyShared } = await api.saveContact(accountId, input);
+      setBooks((prev) => ({
+        ...prev,
+        [accountId]: [...(prev[accountId] ?? []).filter((c) => c.id !== saved.id), saved],
+      }));
+      // L'azienda può essere passata ai colleghi o la sua scheda aver preso il
+      // nome nuovo: si rilegge la rubrica.
+      void loadBook(accountId);
+      if (companyShared > 0) {
+        const domain = saved.address.slice(saved.address.lastIndexOf("@"));
+        showToast(
+          companyShared === 1
+            ? `«${saved.company}» anche per un altro contatto di ${domain}`
+            : `«${saved.company}» anche per altri ${companyShared} contatti di ${domain}`,
+        );
+      }
+      return saved;
+    },
+    [loadBook, showToast],
+  );
+
+  const saveCompany = useCallback(
+    async (accountId: string, input: CompanyInput) => {
+      const { company, contactsRenamed } = await api.saveCompany(accountId, input);
+      await loadBook(accountId);
+      if (contactsRenamed > 0) {
+        showToast(
+          contactsRenamed === 1
+            ? `Nome aggiornato anche per la persona di «${company.name}»`
+            : `Nome aggiornato anche per le ${contactsRenamed} persone di «${company.name}»`,
+        );
+      }
+      return company;
+    },
+    [loadBook, showToast],
+  );
+
+  const deleteContact = useCallback(
+    async (accountId: string, contact: Contact) => {
+      try {
+        await api.deleteContact(accountId, contact.id);
+        setBooks((prev) => ({ ...prev, [accountId]: (prev[accountId] ?? []).filter((c) => c.id !== contact.id) }));
+        setContactSel((id) => (id === contact.id ? null : id));
+      } catch (e) {
+        showToast(errorText(e), "error");
+      }
+    },
+    [showToast],
+  );
+
+  // Mittente → contatto, per la rubrica della casella aperta.
+  const bookIndex = useMemo(() => {
+    const map = new Map<string, Contact>();
+    for (const c of books[current?.accountId ?? ""] ?? []) map.set(c.address, c);
+    return map;
+  }, [books, current?.accountId]);
+  const contactOf = useCallback((address: string) => bookIndex.get(address.toLowerCase()), [bookIndex]);
+  // Aziende già in rubrica, proposte nel campo "Azienda" della finestrella.
+  const companyNames = useMemo(() => {
+    const id = current?.accountId ?? "";
+    const { companies: all } = companyIndex(books[id] ?? [], companies[id] ?? []);
+    return [...all.values()].map((c) => c.name).sort((a, b) => a.localeCompare(b, "it"));
+  }, [books, companies, current?.accountId]);
 
   const loadMessages = useCallback(async (accountId: string, folder: string) => {
     const result = await api.messages(accountId, folder, limitRef.current);
@@ -165,6 +275,7 @@ export default function App() {
     void (async () => {
       const list = await api.accounts();
       setAccounts(list);
+      list.forEach((a) => void loadBook(a.id));
       await Promise.all(list.map((a) => loadFolders(a.id)));
       if (list.length > 0) {
         selectFolder(list[0].id, "INBOX", false);
@@ -175,7 +286,7 @@ export default function App() {
       setCraftStatus(status);
       if (list.length > 0 && status.missing.length > 0) setCraftSetup(true);
     })();
-  }, [loadFolders, selectFolder, syncFolder]);
+  }, [loadFolders, loadBook, selectFolder, syncFolder]);
 
   // Messaggi da leggere nelle chat delle caselle, per i numeri sulle icone.
   useEffect(() => {
@@ -315,16 +426,18 @@ export default function App() {
   );
 
   const newMessage = useCallback(
-    (to = "") => {
+    (fields: Partial<Mailto> = {}) => {
       if (!accounts?.length) return;
       const account = accounts.find((a) => a.id === currentRef.current?.accountId) ?? accounts[0];
       setCompose({
         accountId: account.id,
-        to,
-        cc: "",
-        bcc: "",
-        subject: "",
-        body: account.signature ? `\n\n${account.signature}` : "",
+        to: fields.to ?? "",
+        cc: fields.cc ?? "",
+        bcc: fields.bcc ?? "",
+        subject: fields.subject ?? "",
+        body: fields.body ?? "",
+        quote: "",
+        signatureId: account.signatureNew,
         inReplyTo: null,
         references: null,
         reply: null,
@@ -335,10 +448,127 @@ export default function App() {
     [accounts],
   );
 
+  // Link email aperti con Postamon da Windows (browser, documenti, altri
+  // programmi): diventano un nuovo messaggio nello spazio di lavoro aperto.
+  // Con un messaggio già in scrittura il link aspetta che lo si chiuda.
+  const [mailtoSignal, setMailtoSignal] = useState(0);
+  const composeOpen = compose !== null;
+  const composeOpenRef = useRef(composeOpen);
+  composeOpenRef.current = composeOpen;
+  useEffect(() => {
+    const unlisten = listen("mailto", () => {
+      if (composeOpenRef.current) showToast("Il link email si apre quando chiudi il messaggio che stai scrivendo");
+      setMailtoSignal((n) => n + 1);
+    });
+    return () => void unlisten.then((f) => f());
+  }, [showToast]);
+  useEffect(() => {
+    if (!accounts?.length || composeOpen) return;
+    void api.mailtoTake().then((link) => link && newMessage(link));
+  }, [accounts, composeOpen, mailtoSignal, newMessage]);
+
+  // ---- Claude ----
+
+  const refreshClaude = useCallback(async () => {
+    try {
+      const status = await api.claudeStatus();
+      setClaudeStatus(status);
+      return status;
+    } catch (e) {
+      showToast(errorText(e), "error");
+      return null;
+    }
+  }, [showToast]);
+
+  const toggleClaude = () => {
+    const open = !claudeOpen;
+    setClaudeOpen(open);
+    if (open) setClaudeMounted(true);
+    try {
+      localStorage.setItem(CLAUDE_OPEN_KEY, open ? "1" : "0");
+    } catch {
+      // si riapre chiuso
+    }
+  };
+
+  useEffect(() => {
+    if (claudeOpen && !claudeStatus) void refreshClaude();
+  }, [claudeOpen, claudeStatus, refreshClaude]);
+
+  const loadClaudeRequests = useCallback(() => {
+    void api
+      .claudeRequests()
+      .then(setClaudeRequests)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadClaudeRequests();
+    const unlisten = listen("claude-request", loadClaudeRequests);
+    return () => void unlisten.then((f) => f());
+  }, [loadClaudeRequests]);
+
+  const answerClaude = async (request: ClaudeRequest, answer: ClaudeAnswer) => {
+    setAnswering(true);
+    try {
+      const outcome = await api.claudeAnswer(request.id, answer);
+      if (answer === "edit" && request.kind === "send") setCompose(request.detail.draft);
+      else if (answer === "accept") showToast(outcome);
+    } catch (e) {
+      showToast(errorText(e), "error");
+    } finally {
+      setClaudeRequests((list) => list.filter((r) => r.id !== request.id));
+      setAnswering(false);
+      loadClaudeRequests();
+    }
+  };
+
+  // Claude sa cosa sta guardando l'utente («riassumi questo messaggio»).
+  useEffect(() => {
+    void api
+      .claudeContext({
+        accountId: current?.accountId ?? null,
+        folder: view === "mail" ? (current?.folder ?? null) : null,
+        uid: view === "mail" ? selectedUid : null,
+        composeOpen,
+      })
+      .catch(() => {});
+  }, [current, view, selectedUid, composeOpen]);
+
+  // Messaggio preparato da Claude: si apre nella finestra di scrittura.
+  useEffect(() => {
+    const unlisten = listen<ComposeInit>("claude-compose", ({ payload }) => {
+      if (composeOpenRef.current) showToast("Claude ha preparato un messaggio, ma ne stai già scrivendo uno", "warn");
+      else setCompose(payload);
+    });
+    return () => void unlisten.then((f) => f());
+  }, [showToast]);
+
+  // Claude mostra una cartella, un messaggio o la pagina di un add-on.
+  const addonsRef = useRef(addons);
+  addonsRef.current = addons;
+  useEffect(() => {
+    const unlisten = [
+      listen<ClaudeOpen>("claude-open", ({ payload }) => {
+        if (payload.addon) {
+          const entry = addonEntries(addonsRef.current, "sidebar-view").find((e) => e.addon.id === payload.addon);
+          if (entry) setView(`addon:${entry.key}`);
+          return;
+        }
+        if (!payload.accountId) return;
+        setView("mail");
+        selectFolder(payload.accountId, payload.folder ?? "INBOX");
+        if (payload.uid != null) void openMessage(payload.uid);
+      }),
+      listen("addons-changed", () => void reloadAddons()),
+    ];
+    return () => unlisten.forEach((u) => void u.then((f) => f()));
+  }, [selectFolder, openMessage, reloadAddons]);
+
   // Scorciatoie: Ctrl+N nuovo messaggio, F5 aggiorna.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (compose || addingAccount || signatureFor || addonsOpen || addonPanel) return;
+      if (compose || addingAccount || signatureFor || addonsOpen || addonPanel || claudeRequests.length > 0) return;
       if (e.ctrlKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
         newMessage();
@@ -349,7 +579,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [compose, addingAccount, signatureFor, addonsOpen, addonPanel, newMessage, refresh]);
+  }, [compose, addingAccount, signatureFor, addonsOpen, addonPanel, claudeRequests, newMessage, refresh]);
 
   // ---- richieste degli add-on ----
   // Funzioni normali, non memorizzate: il riquadro dell'add-on legge sempre le
@@ -365,7 +595,9 @@ export default function App() {
       cc: draft.cc,
       bcc: "",
       subject: draft.subject,
-      body: account.signature ? `${draft.body}\n\n${account.signature}` : draft.body,
+      body: draft.body,
+      quote: "",
+      signatureId: account.signatureNew,
       inReplyTo: null,
       references: null,
       reply: null,
@@ -378,7 +610,7 @@ export default function App() {
     if (compose) throw new Error("C'è già un messaggio in scrittura: chiudilo prima");
     const data = await api.composeFrom(message.accountId, message.folder, message.uid, all ? "replyAll" : "reply");
     // Il testo dell'add-on va sopra la firma e la citazione.
-    setCompose({ ...data, bcc: "", body: body.trim() ? body.trimEnd() + data.body : data.body });
+    setCompose({ ...data, bcc: "", body: body.trimEnd() });
   };
 
   const openAddonButton = (entry: AddonEntry) => {
@@ -557,6 +789,7 @@ export default function App() {
     setAddingAccount(false);
     const list = await api.accounts();
     setAccounts(list);
+    void loadBook(account.id);
     await loadFolders(account.id);
     setView("mail");
     selectFolder(account.id, "INBOX", false);
@@ -570,6 +803,16 @@ export default function App() {
       setAccounts(list);
       setFolders((f) => {
         const next = { ...f };
+        delete next[account.id];
+        return next;
+      });
+      setBooks((b) => {
+        const next = { ...b };
+        delete next[account.id];
+        return next;
+      });
+      setCompanies((c) => {
+        const next = { ...c };
         delete next[account.id];
         return next;
       });
@@ -653,9 +896,17 @@ export default function App() {
             </button>
           </div>
         )}
+        <button
+          className={`btn claude-toggle ${claudeOpen ? "active" : ""}`}
+          onClick={toggleClaude}
+          aria-pressed={claudeOpen}
+        >
+          <Sparkles />
+          Claude
+        </button>
       </header>
 
-      <div className="workspace">
+      <div className={`workspace ${claudeOpen ? "with-claude" : ""}`}>
         <Sidebar
           account={currentAccount}
           folders={workspaceFolders}
@@ -668,14 +919,30 @@ export default function App() {
           }}
           onEditSignature={setSignatureFor}
           onRemoveAccount={(a) => void removeAccount(a)}
+          onMailtoSettings={() => void api.mailtoSettings().catch((e) => showToast(errorText(e), "error"))}
           chatActive={view === "chat"}
           chatUnread={chatUnread[currentAccount.id] ?? 0}
           onOpenChat={() => setView("chat")}
+          contactsActive={view === "contacts"}
+          onOpenContacts={() => setView("contacts")}
           addonViews={addonViews}
           activeAddon={addonView?.key ?? null}
           onOpenAddon={(key) => setView(`addon:${key}`)}
         />
-        {view === "chat" ? (
+        {view === "contacts" ? (
+          <AddressBook
+            account={currentAccount}
+            contacts={books[currentAccount.id] ?? null}
+            companies={companies[currentAccount.id] ?? []}
+            selectedId={contactSel}
+            onSelect={setContactSel}
+            onSave={(input) => saveContact(currentAccount.id, input)}
+            suggestCompany={(address) => api.companyFor(currentAccount.id, address)}
+            onDelete={(c) => deleteContact(currentAccount.id, c)}
+            onSaveCompany={(input) => saveCompany(currentAccount.id, input)}
+            onWrite={(to) => newMessage({ to })}
+          />
+        ) : view === "chat" ? (
           <ChatView
             key={currentAccount.id}
             account={currentAccount}
@@ -718,6 +985,7 @@ export default function App() {
             subtitle={[currentAccount?.email, unseen > 0 ? `${unseen} da leggere` : ""].filter(Boolean).join(" · ")}
             page={page}
             showRecipient={showRecipient}
+            contactOf={contactOf}
             selectedUid={selectedUid}
             loadingOlder={loadingOlder}
             onSelect={(uid) => void openMessage(uid)}
@@ -739,14 +1007,46 @@ export default function App() {
             onOpenAttachment={(a) => void previewAttachment(a)}
             onSaveAttachment={(a) => void saveAttachment(a)}
             onLink={(url) => void openUrl(url)}
-            onMailto={(address) => newMessage(address)}
+            onMailto={(link) => void api.mailtoParse(link).then((m) => m && newMessage(m))}
             addonButtons={addonButtons}
             onAddonButton={openAddonButton}
+            contact={opened ? (contactOf(opened.fromAddr) ?? null) : null}
+            canAddContact={
+              !!opened?.fromAddr && opened.fromAddr.toLowerCase() !== currentAccount.email.toLowerCase()
+            }
+            onSaveContact={(input) => saveContact(currentAccount.id, input)}
+            suggestCompany={(address) => api.companyFor(currentAccount.id, address)}
+            companyNames={companyNames}
+            onShowContact={(c) => {
+              setContactSel(c.id);
+              setView("contacts");
+            }}
           />
         </section>
           </>
         )}
+        {claudeMounted && (
+          <ClaudePanel
+            open={claudeOpen}
+            status={claudeStatus}
+            onRefresh={refreshClaude}
+            openSubject={view === "mail" && opened ? opened.subject : null}
+            onToast={showToast}
+            onClose={toggleClaude}
+          />
+        )}
       </div>
+
+      {claudeRequests.length > 0 && (
+        <ClaudeRequestDialog
+          key={claudeRequests[0].id}
+          request={claudeRequests[0]}
+          total={claudeRequests.length}
+          busy={answering}
+          canEdit={!compose}
+          onAnswer={(answer) => void answerClaude(claudeRequests[0], answer)}
+        />
+      )}
 
       {addonPanel && (
         <AddonPanel
@@ -811,15 +1111,12 @@ export default function App() {
         </div>
       )}
 
-      {signatureFor && (
-        <SignatureDialog
-          account={signatureFor}
+      {signatureFor && accounts && (
+        <SignaturesDialog
+          accounts={accounts}
+          accountId={signatureFor.id}
           onClose={() => setSignatureFor(null)}
-          onSaved={(updated) => {
-            setSignatureFor(null);
-            setAccounts((list) => list && list.map((a) => (a.id === updated.id ? updated : a)));
-            showToast("Firma salvata");
-          }}
+          onAccounts={setAccounts}
         />
       )}
 

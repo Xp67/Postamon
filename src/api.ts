@@ -10,7 +10,16 @@ export interface Account {
   imapPort: number;
   smtpHost: string;
   smtpPort: number;
-  signature: string;
+  /** Firma dei messaggi nuovi e di risposte e inoltri (id nell'elenco delle firme). */
+  signatureNew: string | null;
+  signatureReply: string | null;
+}
+
+/** Firma dell'elenco: HTML già ripulito, immagini incorporate come data:. */
+export interface Signature {
+  id: string;
+  name: string;
+  html: string;
 }
 
 export type FolderRole = "inbox" | "sent" | "drafts" | "trash" | "junk" | "archive";
@@ -71,12 +80,74 @@ export interface MsgRef {
   uid: number;
 }
 
+/** Contatto della rubrica di una casella. */
+export interface Contact {
+  id: number;
+  /** In minuscolo: è la chiave con cui si riconoscono i mittenti. */
+  address: string;
+  name: string;
+  company: string;
+  phone: string;
+  notes: string;
+  created: number;
+  /** Il dominio è di un'azienda, non di un servizio di posta comune (Gmail, Libero, PEC…). */
+  business: boolean;
+}
+
+/** Scheda di un'azienda: le persone ci sono legate dal nome nel loro campo "Azienda". */
+export interface Company {
+  id: number;
+  name: string;
+  vat: string;
+  phone: string;
+  address: string;
+  website: string;
+  notes: string;
+}
+
+/** Scheda da salvare. Senza `id` l'azienda non ha ancora una scheda e `previousName` è il nome delle sue persone. */
+export interface CompanyInput {
+  id?: number;
+  previousName: string;
+  name: string;
+  vat: string;
+  phone: string;
+  address: string;
+  website: string;
+  notes: string;
+}
+
+export interface SavedCompany {
+  company: Company;
+  /** Persone che hanno preso il nome nuovo dell'azienda. */
+  contactsRenamed: number;
+}
+
+export interface SavedContact {
+  contact: Contact;
+  /** Colleghi dello stesso dominio aziendale che hanno preso la sua azienda. */
+  companyShared: number;
+}
+
+/** Contatto da salvare: nuovo se manca `id`. */
+export interface ContactInput {
+  id?: number;
+  address: string;
+  name: string;
+  company: string;
+  phone: string;
+  notes: string;
+}
+
 export interface ComposeData {
   accountId: string;
   to: string;
   cc: string;
   subject: string;
   body: string;
+  /** Citazione o messaggio inoltrato, sotto la firma. */
+  quote: string;
+  signatureId: string | null;
   inReplyTo: string | null;
   references: string | null;
   reply: MsgRef | null;
@@ -107,6 +178,8 @@ export interface Outgoing {
   bcc: string;
   subject: string;
   body: string;
+  quote: string;
+  signatureId: string | null;
   attachments: string[];
   inReplyTo: string | null;
   references: string | null;
@@ -236,6 +309,15 @@ export interface SyncError {
   message: string;
 }
 
+/** Nuovo messaggio chiesto da un link email (`mailto:`). */
+export interface Mailto {
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  body: string;
+}
+
 /** Aggiornamento di Postamon già scaricato e verificato. */
 export interface UpdateInfo {
   version: string;
@@ -306,12 +388,110 @@ export interface AddonMessage {
   attachments: Attachment[];
 }
 
+// ---- Claude ----
+
+/** Claude Code sul PC: Postamon ne mostra solo indirizzo e piano dell'accesso. */
+export interface ClaudeCli {
+  path: string;
+  version: string;
+  loggedIn: boolean;
+  email: string | null;
+  plan: string | null;
+  authMethod: string | null;
+}
+
+export interface ClaudeStatus {
+  enabled: boolean;
+  cli: ClaudeCli | null;
+  desktopInstalled: boolean;
+  desktopLinked: boolean;
+  codeLinked: boolean;
+  /** Modello del pannello, uno di `CLAUDE_MODELS`. */
+  model: string;
+}
+
+/** Modelli del pannello: nomi brevi di Claude Code, che sceglie l'ultima versione. */
+export const CLAUDE_MODELS = [
+  { id: "haiku", label: "Haiku" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "opus", label: "Opus" },
+  { id: "fable", label: "Fable" },
+];
+
+export interface ClaudeContext {
+  accountId: string | null;
+  folder: string | null;
+  uid: number | null;
+  composeOpen: boolean;
+}
+
+export interface ClaudeMessageBrief {
+  uid: number;
+  subject: string;
+  from: string;
+  date: number;
+}
+
+/** Azione che Claude vuole fare e che l'utente conferma. */
+export type ClaudeRequest = { id: number; client: string } & (
+  | { kind: "send"; detail: { from: string; signature: string | null; draft: ComposeData & { bcc: string } } }
+  | {
+      kind: "move";
+      detail: { account: string; folder: string; destination: string; messages: ClaudeMessageBrief[] };
+    }
+  | { kind: "trash"; detail: { account: string; folder: string; permanent: boolean; messages: ClaudeMessageBrief[] } }
+  | {
+      kind: "addon-install";
+      detail: {
+        addon: {
+          id: string;
+          name: string;
+          version: string;
+          author: string;
+          description: string;
+          permissions: string[];
+          update: boolean;
+        };
+      };
+    }
+  | { kind: "addon-uninstall"; detail: { addon: { id: string; name: string; developerMode: boolean } } }
+);
+
+export type ClaudeAnswer = "accept" | "reject" | "edit";
+
+/** Evento della conversazione del pannello. */
+export type ClaudeChatEvent = { generation: number } & (
+  | { kind: "ready"; model: string }
+  | { kind: "text"; delta: string }
+  | { kind: "tool"; id: string; name: string; input: Record<string, unknown> | null }
+  | { kind: "toolResult"; id: string; isError: boolean }
+  | { kind: "done"; error: string | null }
+  | { kind: "limit"; resetsAt: number | null }
+  | { kind: "exit"; error: string | null }
+);
+
+/** Cosa Claude vuole mostrare all'utente in Postamon. */
+export interface ClaudeOpen {
+  accountId?: string;
+  folder?: string;
+  uid?: number | null;
+  addon?: string;
+}
+
 export const api = {
   accounts: () => invoke<Account[]>("accounts_list"),
   addAccount: (input: NewAccount) => invoke<Account>("account_add", { input }),
   removeAccount: (accountId: string) => invoke<void>("account_remove", { accountId }),
-  setSignature: (accountId: string, signature: string) =>
-    invoke<Account>("account_set_signature", { accountId, signature }),
+  setSignatures: (accountId: string, signatureNew: string | null, signatureReply: string | null) =>
+    invoke<Account>("account_set_signatures", { accountId, signatureNew, signatureReply }),
+  signatures: () => invoke<Signature[]>("signatures_list"),
+  saveSignature: (id: string | null, name: string, html: string) =>
+    invoke<Signature>("signature_save", { id, name, html }),
+  deleteSignature: (id: string) => invoke<Account[]>("signature_delete", { id }),
+  cleanSignature: (html: string) => invoke<string>("signature_clean", { html }),
+  signatureImage: (path: string) => invoke<string>("signature_image", { path }),
+  outlookSignatures: () => invoke<string[]>("signatures_outlook"),
+  importOutlookSignatures: (names: string[]) => invoke<Signature[]>("signatures_import_outlook", { names }),
   folders: (accountId: string) => invoke<Folder[]>("folders_list", { accountId }),
   sync: (accountId: string, folder: string, refreshFolders: boolean) =>
     invoke<{ newMessages: number }>("sync", { accountId, folder, refreshFolders }),
@@ -332,6 +512,15 @@ export const api = {
     invoke<void>("attachment_open", { accountId, folder, uid, index }),
   trustSender: (address: string) => invoke<void>("sender_trust", { address }),
   contacts: (query: string) => invoke<string[]>("contacts_suggest", { query }),
+  addressBook: (accountId: string) => invoke<Contact[]>("address_book_list", { accountId }),
+  saveContact: (accountId: string, contact: ContactInput) =>
+    invoke<SavedContact>("address_book_save", { accountId, contact }),
+  companyFor: (accountId: string, address: string) =>
+    invoke<string | null>("address_book_company", { accountId, address }),
+  deleteContact: (accountId: string, id: number) => invoke<void>("address_book_delete", { accountId, id }),
+  companies: (accountId: string) => invoke<Company[]>("address_book_companies", { accountId }),
+  saveCompany: (accountId: string, company: CompanyInput) =>
+    invoke<SavedCompany>("address_book_company_save", { accountId, company }),
   filesInfo: (paths: string[]) => invoke<FileInfo[]>("files_info", { paths }),
   composeFrom: (accountId: string, folder: string, uid: number, mode: "reply" | "replyAll" | "forward") =>
     invoke<ComposeData>("compose_from", { accountId, folder, uid, mode }),
@@ -368,6 +557,12 @@ export const api = {
   internoFileOpen: (accountId: string, file: ChatFile, native: boolean) =>
     invoke<void>("interno_file_open", { accountId, fileId: file.id, name: file.name, native }),
 
+  /** Link email con cui Windows ha aperto Postamon (una volta sola). */
+  mailtoTake: () => invoke<Mailto | null>("mailto_take"),
+  mailtoParse: (link: string) => invoke<Mailto | null>("mailto_parse", { link }),
+  /** Pagina di Windows dove si sceglie Postamon per i link email. */
+  mailtoSettings: () => invoke<void>("mailto_settings"),
+
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   /** Chiude Postamon: l'installer lo riapre aggiornato. */
   updateInstall: () => invoke<void>("update_install"),
@@ -383,7 +578,66 @@ export const api = {
     invoke<AddonMessage>("addon_message", { addonId, accountId, folder, uid }),
   addonStorage: (addonId: string, op: "get" | "set" | "remove" | "keys", key?: string, value?: unknown) =>
     invoke<unknown>("addon_storage", { addonId, op, key: key ?? null, value: value ?? null }),
+
+  claudeStatus: () => invoke<ClaudeStatus>("claude_status"),
+  claudeSetEnabled: (enabled: boolean) => invoke<void>("claude_set_enabled", { enabled }),
+  /** Vale dal prossimo messaggio, nella stessa conversazione. */
+  claudeSetModel: (model: string) => invoke<void>("claude_set_model", { model }),
+  /** Apre la finestra di accesso di Claude Code. */
+  claudeLogin: () => invoke<void>("claude_login"),
+  claudeLinkDesktop: (on: boolean) => invoke<void>("claude_link_desktop", { on }),
+  claudeLinkCode: (on: boolean) => invoke<void>("claude_link_code", { on }),
+  claudeContext: (context: ClaudeContext) => invoke<void>("claude_context", { context }),
+  claudeRequests: () => invoke<ClaudeRequest[]>("claude_requests"),
+  claudeAnswer: (id: number, answer: ClaudeAnswer) => invoke<string>("claude_answer", { id, answer }),
+  /** Restituisce il numero della conversazione negli eventi `claude-chat`. */
+  claudeChatSend: (text: string) => invoke<number>("claude_chat_send", { text }),
+  claudeChatStop: () => invoke<void>("claude_chat_stop"),
+  claudeChatReset: () => invoke<void>("claude_chat_reset"),
 };
+
+/** Cosa sta facendo Claude con uno strumento di Postamon, in parole semplici. */
+export function claudeToolText(name: string, input: Record<string, unknown> | null): string {
+  const query = typeof input?.query === "string" ? input.query : "";
+  switch (name) {
+    case "list_accounts":
+      return "Guarda le caselle";
+    case "list_folders":
+      return "Guarda le cartelle";
+    case "list_messages":
+      return "Scorre i messaggi";
+    case "search_messages":
+      return query ? `Cerca «${query}»` : "Cerca nella posta";
+    case "read_message":
+      return "Legge un messaggio";
+    case "current_message":
+      return "Guarda il messaggio aperto";
+    case "compose_email":
+      return "Prepara un messaggio";
+    case "send_email":
+      return "Chiede di inviare un messaggio";
+    case "mark_messages":
+      return "Segna dei messaggi";
+    case "move_messages":
+      return "Chiede di spostare dei messaggi";
+    case "trash_messages":
+      return "Chiede di cestinare dei messaggi";
+    case "request_status":
+      return "Controlla una conferma";
+    case "open_in_postamon":
+      return "Ti mostra qualcosa in Postamon";
+    case "list_addons":
+      return "Guarda gli add-on";
+    case "install_addon":
+      return "Chiede di installare un add-on";
+    case "uninstall_addon":
+      return "Chiede di togliere un add-on";
+    case "set_addon_enabled":
+      return "Attiva o disattiva un add-on";
+    default:
+      return name;
+  }
+}
 
 /** Cosa può fare un add-on con un permesso, in parole semplici. */
 export function permissionText(p: string): { text: string; warn: boolean } {

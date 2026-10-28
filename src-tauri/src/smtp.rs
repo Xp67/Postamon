@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use lettre::message::header::ContentType;
-use lettre::message::{Attachment, Mailbox, MultiPart};
+use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 use crate::accounts::Account;
-use crate::render;
+use crate::{render, signatures};
 
 pub struct OutgoingFile {
     pub name: String,
@@ -24,6 +24,10 @@ pub struct Draft<'a> {
     pub bcc: &'a str,
     pub subject: &'a str,
     pub body: &'a str,
+    /// Citazione o messaggio inoltrato, sotto la firma.
+    pub quote: &'a str,
+    /// HTML della firma (già ripulito, dall'elenco delle firme).
+    pub signature: Option<&'a str>,
     pub files: Vec<OutgoingFile>,
     pub in_reply_to: Option<String>,
     pub references: Option<String>,
@@ -54,8 +58,42 @@ pub fn build(acc: &Account, draft: Draft<'_>) -> Result<Message> {
     if let Some(refs) = draft.references {
         b = b.references(refs);
     }
-    let text = draft.body.replace("\r\n", "\n");
-    let alternative = MultiPart::alternative_plain_html(text.clone(), text_to_html(&text));
+    // Testo, firma e citazione, separati da una riga vuota, in tutte e due le versioni.
+    let mut text: Vec<String> = Vec::new();
+    let mut html: Vec<String> = Vec::new();
+    let mut images = Vec::new();
+    let body = draft.body.replace("\r\n", "\n");
+    if !body.trim().is_empty() {
+        text.push(body.trim_end().to_string());
+        html.push(lines_to_html(body.trim_end()));
+    }
+    if let Some(sig) = draft.signature.filter(|s| !s.trim().is_empty()) {
+        let (sig_html, inline) = signatures::for_mail(sig);
+        text.push(signatures::to_text(sig));
+        html.push(format!("<div>{sig_html}</div>"));
+        images = inline;
+    }
+    let quote = draft.quote.replace("\r\n", "\n");
+    if !quote.trim().is_empty() {
+        text.push(quote.trim_end().to_string());
+        html.push(lines_to_html(quote.trim_end()));
+    }
+    let text = text.join("\n\n");
+    let html = format!(
+        "<div style=\"font-family:'Segoe UI',Calibri,Arial,sans-serif;font-size:11pt;color:#1b1b1b\">{}</div>",
+        html.join("<div>&nbsp;</div>")
+    );
+    let alternative = if images.is_empty() {
+        MultiPart::alternative_plain_html(text, html)
+    } else {
+        // Le immagini della firma viaggiano col messaggio, legate all'HTML con il loro cid.
+        let mut related = MultiPart::related().singlepart(SinglePart::html(html));
+        for img in images {
+            let ct = ContentType::parse(&img.mime)?;
+            related = related.singlepart(Attachment::new_inline(img.cid).body(img.data, ct));
+        }
+        MultiPart::alternative().singlepart(SinglePart::plain(text)).multipart(related)
+    };
     let message = if draft.files.is_empty() {
         b.multipart(alternative)?
     } else {
@@ -97,12 +135,10 @@ pub fn parse_recipients(input: &str) -> Result<Vec<Mailbox>> {
         .collect()
 }
 
-/// Versione HTML del testo scritto: stesso contenuto, carattere leggibile,
-/// righe citate ("> ") in grigio come nei client più diffusi.
-fn text_to_html(text: &str) -> String {
-    let mut html = String::from(
-        "<div style=\"font-family:'Segoe UI',Calibri,Arial,sans-serif;font-size:11pt;color:#1b1b1b\">",
-    );
+/// Versione HTML del testo scritto: stesse righe, link cliccabili, righe
+/// citate ("> ") in grigio come nei client più diffusi.
+fn lines_to_html(text: &str) -> String {
+    let mut html = String::new();
     for line in text.split('\n') {
         if let Some(quoted) = line.strip_prefix('>') {
             html.push_str(&format!(
@@ -113,7 +149,6 @@ fn text_to_html(text: &str) -> String {
             html.push_str(&format!("<div>{}</div>", nbsp_or(&render::linkify(line))));
         }
     }
-    html.push_str("</div>");
     html
 }
 
@@ -155,6 +190,8 @@ pub async fn send(acc: &Account, password: &str, message: &Message) -> Result<Ve
 
 #[cfg(test)]
 mod tests {
+    use mail_parser::MimeHeaders;
+
     use super::*;
 
     #[test]
@@ -166,9 +203,8 @@ mod tests {
         assert!(parse_recipients("non-un-indirizzo").is_err());
     }
 
-    #[test]
-    fn builds_html_alternative_with_attachment() {
-        let acc = Account {
+    fn account() -> Account {
+        Account {
             id: "m@x.it".into(),
             email: "m@x.it".into(),
             name: "Marco".into(),
@@ -176,20 +212,61 @@ mod tests {
             imap_port: 993,
             smtp_host: String::new(),
             smtp_port: 465,
+            signature_new: None,
+            signature_reply: None,
             signature: String::new(),
             accept_invalid_certs: false,
+        }
+    }
+
+    #[test]
+    fn signature_sits_between_text_and_quote_with_inline_image() {
+        // PNG di un pixel, come nelle firme vere
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        let signature = format!("<table><tbody><tr><td><img src=\"{png}\" alt=\"Logo\"></td><td><div><b>Marco</b></div><div>Tel. 0331</div></td></tr></tbody></table>");
+        let draft = Draft {
+            to: "a@x.it",
+            cc: "",
+            bcc: "",
+            subject: "R: Prova",
+            body: "Le confermo.\n\n",
+            quote: "Anna ha scritto:\n> Va bene?",
+            signature: Some(&signature),
+            files: Vec::new(),
+            in_reply_to: None,
+            references: None,
         };
+        let raw = build(&account(), draft).unwrap().formatted();
+        let msg = render::parse(&raw).unwrap();
+        let html = msg.body_html(0).unwrap();
+        let cid = html.split("src=\"cid:").nth(1).expect("immagine della firma con il suo cid");
+        let cid = &cid[..cid.find('"').unwrap()];
+        let image = msg.parts.iter().find(|p| p.content_id() == Some(cid)).expect("parte dell'immagine");
+        assert_eq!(image.content_type().and_then(|c| c.subtype()), Some("png"));
+        assert!(!html.contains("data:image"));
+        assert!(html.find("Le confermo").unwrap() < html.find("<b>Marco</b>").unwrap());
+        assert!(html.find("<b>Marco</b>").unwrap() < html.find("Anna ha scritto").unwrap());
+        // versione testo: testo, firma, citazione
+        assert_eq!(msg.body_text(0).unwrap().replace("\r\n", "\n"), "Le confermo.\n\nMarco\nTel. 0331\n\nAnna ha scritto:\n> Va bene?");
+        // l'immagine della firma non è un allegato da elencare
+        assert!(render::attachment_list(&raw).unwrap().is_empty());
+    }
+
+    #[test]
+    fn builds_html_alternative_with_attachment() {
         let draft = Draft {
             to: "a@x.it",
             cc: "",
             bcc: "nascosto@x.it",
             subject: "Prova",
             body: "Ciao\n> citato https://x.it",
+            quote: "",
+            signature: None,
             files: vec![OutgoingFile { name: "nota.txt".into(), mime: "text/plain".into(), data: b"ok".to_vec() }],
             in_reply_to: Some("<abc@x.it>".into()),
             references: None,
         };
-        let msg = build(&acc, draft).unwrap();
+        let msg = build(&account(), draft).unwrap();
         let raw = String::from_utf8(msg.formatted()).unwrap();
         assert!(raw.contains("multipart/mixed"));
         assert!(raw.contains("multipart/alternative"));

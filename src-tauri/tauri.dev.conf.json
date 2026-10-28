@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Postamon Dev",
+  "identifier": "it.dimensionesalotto.postamon.dev",
+  "app": {
+    "windows": [
+      {
+        "title": "Postamon Dev",
+        "width": 1320,
+        "height": 840,
+        "minWidth": 980,
+        "minHeight": 600,
+        "center": true
+      }
+    ]
+  },
+  "bundle": {
+    "icon": [
+      "icons-dev/32x32.png",
+      "icons-dev/128x128.png",
+      "icons-dev/128x128@2x.png",
+      "icons-dev/icon.ico"
+    ]
+  }
+}

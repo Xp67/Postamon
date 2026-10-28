@@ -1,9 +1,29 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { File, LoaderCircle, Paperclip, Send, TriangleAlert, X } from "lucide-react";
-import { api, errorText, type Account, type Attachment, type FileInfo, type MsgRef, type SendReport } from "../api";
+import {
+  ChevronDown,
+  ChevronRight,
+  File,
+  LoaderCircle,
+  Paperclip,
+  Send,
+  Signature as SignatureIcon,
+  TriangleAlert,
+  X,
+} from "lucide-react";
+import {
+  api,
+  errorText,
+  type Account,
+  type Attachment,
+  type FileInfo,
+  type MsgRef,
+  type SendReport,
+  type Signature,
+} from "../api";
 import { fileSize } from "../format";
+import { SignatureHtml } from "./SignatureEditor";
 
 export interface ComposeInit {
   accountId: string;
@@ -12,6 +32,9 @@ export interface ComposeInit {
   bcc: string;
   subject: string;
   body: string;
+  /** Citazione o messaggio inoltrato: va sotto la firma. */
+  quote: string;
+  signatureId: string | null;
   inReplyTo: string | null;
   references: string | null;
   reply: MsgRef | null;
@@ -37,6 +60,12 @@ export function Compose({ accounts, initial, onClose, onSent }: Props) {
   const [showCopies, setShowCopies] = useState(initial.cc !== "" || initial.bcc !== "");
   const [subject, setSubject] = useState(initial.subject);
   const [body, setBody] = useState(initial.body);
+  const [quote, setQuote] = useState(initial.quote);
+  // Un inoltro si legge subito; in una risposta la citazione resta chiusa.
+  const [showQuote, setShowQuote] = useState(initial.forward !== null);
+  const [signatureId, setSignatureId] = useState(initial.signatureId);
+  const [signatureTouched, setSignatureTouched] = useState(false);
+  const [signatures, setSignatures] = useState<Signature[] | null>(null);
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -44,15 +73,41 @@ export function Compose({ accounts, initial, onClose, onSent }: Props) {
   const [askDiscard, setAskDiscard] = useState(false);
   const [dragging, setDragging] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const quoteRef = useRef<HTMLTextAreaElement>(null);
 
-  // In risposta il cursore va in cima al testo, sopra la citazione.
+  // In risposta il cursore va in cima al testo, sopra firma e citazione.
   useEffect(() => {
     if (initial.to && bodyRef.current) {
       bodyRef.current.focus();
       bodyRef.current.setSelectionRange(0, 0);
-      bodyRef.current.scrollTop = 0;
     }
   }, [initial.to]);
+
+  useEffect(() => {
+    api
+      .signatures()
+      .then(setSignatures)
+      .catch(() => {});
+  }, []);
+
+  // Testo e citazione crescono con quello che contengono: scorre tutto il
+  // messaggio insieme, firma compresa, come arriverà.
+  useLayoutEffect(() => {
+    for (const el of [bodyRef.current, quoteRef.current]) {
+      if (!el) continue;
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    }
+  }, [body, quote, showQuote]);
+
+  // Cambiando casella si passa alla sua firma, se non è stata scelta a mano.
+  const replying = initial.reply !== null || initial.forward !== null;
+  const changeAccount = (id: string) => {
+    setAccountId(id);
+    const acc = accounts.find((a) => a.id === id);
+    if (acc && !signatureTouched) setSignatureId(replying ? acc.signatureReply : acc.signatureNew);
+  };
+  const signature = signatures?.find((s) => s.id === signatureId) ?? null;
 
   const addPaths = async (paths: string[]) => {
     if (!paths.length) return;
@@ -91,7 +146,13 @@ export function Compose({ accounts, initial, onClose, onSent }: Props) {
     [files, initial.forwardAttachments],
   );
 
-  const dirty = to !== initial.to || cc !== initial.cc || subject !== initial.subject || body !== initial.body || files.length > 0;
+  const dirty =
+    to !== initial.to ||
+    cc !== initial.cc ||
+    subject !== initial.subject ||
+    body !== initial.body ||
+    quote !== initial.quote ||
+    files.length > 0;
 
   const close = () => {
     if (dirty && !askDiscard) setAskDiscard(true);
@@ -114,6 +175,10 @@ export function Compose({ accounts, initial, onClose, onSent }: Props) {
         bcc,
         subject,
         body,
+        quote,
+        // Una firma eliminata intanto non si manda; a elenco non ancora
+        // arrivato decide il motore.
+        signatureId: signatures === null ? signatureId : (signature?.id ?? null),
         attachments: files.map((f) => f.path),
         inReplyTo: initial.inReplyTo,
         references: initial.references,
@@ -152,7 +217,7 @@ export function Compose({ accounts, initial, onClose, onSent }: Props) {
         <div className="field">
           <label>Da</label>
           {accounts.length > 1 ? (
-            <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <select value={accountId} onChange={(e) => changeAccount(e.target.value)}>
               {accounts.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name ? `${a.name} <${a.email}>` : a.email}
@@ -188,14 +253,60 @@ export function Compose({ accounts, initial, onClose, onSent }: Props) {
           <span />
         </div>
 
-        <textarea
-          ref={bodyRef}
-          className="compose-body"
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          spellCheck
-          lang="it"
-        />
+        <div className="compose-scroll">
+          <textarea
+            ref={bodyRef}
+            className="compose-body"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            spellCheck
+            lang="it"
+          />
+
+          <div className="compose-signature">
+            <div className="compose-signature-head">
+              <SignatureIcon />
+              <select
+                value={signature?.id ?? ""}
+                aria-label="Firma"
+                onChange={(e) => {
+                  setSignatureId(e.target.value || null);
+                  setSignatureTouched(true);
+                }}
+              >
+                <option value="">Nessuna firma</option>
+                {signatures?.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {signature && <SignatureHtml html={signature.html} />}
+          </div>
+
+          {initial.quote && (
+            <div className="compose-quote">
+              <button className="compose-quote-head" onClick={() => setShowQuote(!showQuote)} aria-expanded={showQuote}>
+                {showQuote ? <ChevronDown /> : <ChevronRight />}
+                <span className="compose-quote-title">
+                  {initial.forward ? "Messaggio inoltrato" : "Messaggio originale"}
+                </span>
+                {!showQuote && <span className="compose-quote-peek">{quote.split("\n")[0]}</span>}
+              </button>
+              {showQuote && (
+                <textarea
+                  ref={quoteRef}
+                  className="compose-body compose-quote-body"
+                  value={quote}
+                  onChange={(e) => setQuote(e.target.value)}
+                  spellCheck
+                  lang="it"
+                />
+              )}
+            </div>
+          )}
+        </div>
 
         {(files.length > 0 || initial.forwardAttachments.length > 0) && (
           <div className="compose-files">

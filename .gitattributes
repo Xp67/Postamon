@@ -6,5 +6,6 @@ src-tauri/testdata/** -text
 addons/** text=auto eol=lf
 sdk/** text=auto eol=lf
 
-# Script per il server Linux.
+# Script per il server Linux, e pm per Git Bash (con il CR bash non lo legge).
 *.sh text eol=lf
+scripts/pm text eol=lf

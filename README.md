@@ -19,9 +19,45 @@ delle caselle aziendali, senza il resto di Outlook.
 - **Allegati**: si aprono con il programma predefinito o si salvano. I tipi eseguibili (.exe, .js, .bat, .lnk…)
   non si aprono da qui: vanno salvati.
 - **Scrittura**: nuovo messaggio, rispondi, rispondi a tutti, inoltra (con gli allegati originali), Cc e Ccn,
-  allegati da pulsante o trascinandoli sulla finestra, suggerimento degli indirizzi già visti, firma per casella
-  (alla prima configurazione viene copiata da Outlook se c'è). Dopo l'invio la copia va in "Posta inviata".
+  allegati da pulsante o trascinandoli sulla finestra, suggerimento degli indirizzi già visti. Dopo l'invio la
+  copia va in "Posta inviata".
+- **Firme** (menu della casella → Firme): un elenco di firme con nome, come in Outlook, scritte in un editor
+  visuale (carattere, dimensione, colori, link, immagini dal PC o incollate, colonne logo + recapiti, linea) o
+  direttamente in HTML. Per ogni casella si sceglie la firma dei messaggi nuovi e quella di risposte e inoltri;
+  mentre scrivi la firma compare sotto il testo, già impaginata, e si può cambiare o togliere per quel messaggio.
+  Nelle risposte e negli inoltri sta fra il testo e il messaggio originale. Le immagini partono dentro il
+  messaggio (parti `cid:`), non come link. Alla prima partenza Postamon importa le firme di Outlook del PC, con
+  le loro immagini, e dà a ogni casella quella col suo indirizzo nel nome; "Importa da Outlook" prende quelle
+  aggiunte dopo.
+- **Rubrica per casella**: accanto al nome di un mittente che non è in rubrica c'è un'icona; la finestrella
+  che apre (nasce dall'icona e ci rientra chiudendosi) ha già il nome del mittente e la sua email, più azienda,
+  telefono e note facoltativi. Le mail dei contatti in rubrica hanno a sinistra un semicerchio verde e il nome
+  scritto in rubrica; nella mail aperta l'etichetta "In rubrica" porta al contatto. La vista **Rubrica** (sotto
+  la chat) mostra i contatti in ordine alfabetico o raggruppati per dominio, con ricerca, "Nuovo contatto",
+  modifica, "Scrivi" e "Togli dalla rubrica". Un dominio aziendale vale come azienda: a un contatto nuovo si
+  propone l'azienda dei colleghi con lo stesso dominio, e quando si scrive o si rinomina l'azienda di un contatto
+  la prendono anche i colleghi senza azienda o con il vecchio nome (chi ne ha una diversa resta com'è). I domini
+  di uso comune (Gmail, Outlook, Libero, PEC…) non contano: l'elenco è `PUBLIC_DOMAINS` in `store.rs`.
+  Nella vista per dominio (`src/book.ts`) chi scrive da un dominio comune ma è di un'azienda con un dominio
+  aziendale sta nel gruppo di quel dominio; un'azienda con più domini diventa un gruppo con un sottogruppo per
+  dominio più "Altri indirizzi". Ogni azienda ha una **scheda** (Partita IVA, telefono, indirizzo, sito, note,
+  persone, "Scrivi a tutti"), aperta dall'intestazione del gruppo o dall'azienda nella scheda di una persona;
+  rinominandola cambia il nome a tutte le sue persone, e se la si rinomina dalla scheda di una persona la scheda
+  la segue. Il campo "Azienda" propone le aziende già in rubrica. Togliendo la casella da Postamon la rubrica
+  resta nell'archivio e torna se la si riaggiunge. Le animazioni usano anime.js (`src/anim.ts`), che con "meno movimento" di Windows
+  porta subito allo stato finale.
+- **Barra del titolo nel colore dell'app** (Windows 11): la barra di Windows prende il grigio-azzurro della
+  fascia in alto, così a finestra ingrandita non c'è stacco; pulsanti, aggancio ai bordi e doppio clic restano
+  quelli di sistema. Su Windows 10 resta la barra normale.
 - **Password** nella Gestione credenziali di Windows, mai su file.
+- **Link email** (`mailto:`): a ogni avvio la versione installata si registra, per l'utente, fra i programmi che
+  aprono i link email, così Windows la propone quando se ne clicca uno (in un sito, in un PDF, in un altro
+  programma). Il link diventa un nuovo messaggio nello spazio di lavoro aperto, con destinatari, Cc, Ccn, oggetto
+  e testo; gli allegati che qualche link prova a indicare (`attach=`) no. Se Postamon è già aperto il link arriva
+  lì; se si sta scrivendo un altro messaggio, aspetta che lo si chiuda. Windows non lascia che un programma si
+  renda predefinito da solo: dal menu della casella, **Apri i link email con Postamon** apre la pagina di
+  Impostazioni dove sceglierlo. La disinstallazione toglie la registrazione (`src-tauri/windows/hooks.nsh`); le
+  copie di sviluppo (`tauri dev`) non si registrano, per non prendere il posto di quella installata.
 
 Scorciatoie: `Ctrl+N` nuovo messaggio, `F5` aggiorna, frecce su/giù nell'elenco, `Canc` elimina,
 `Ctrl+Invio` invia, `Esc` chiude la finestra di scrittura.
@@ -46,16 +82,54 @@ senza quella firma non si installa. La chiave pubblica è in `src-tauri/tauri.co
 > quella non si possono più pubblicare aggiornamenti: i Postamon installati andrebbero reinstallati a mano con una
 > versione che porta una chiave nuova.
 
-Pubblicare una versione (versione nei tre file, installer firmato, invio al server):
+### Pubblicare: `pm ship`
+
+`scripts/pm` (bash, per Git Bash, sul modello di `c4` di c4shopper) porta a tutti quello che c'è in `main`. La
+prova si fa prima, in locale, con Postamon Dev (vedi "Sviluppo"):
+
+```sh
+pm status                  # versione nel codice e pubblicata, commit da pubblicare, server della chat
+pm ship                    # chiede versione (patch/minor/major) e nota per i colleghi
+pm ship minor -m "Rubrica e pannello Claude"
+pm server                  # solo il server della chat
+pm rollback server         # rimette il server della chat di prima
+pm rollback app            # il server torna a proporre la versione di prima
+```
+
+`pm ship` si ferma prima di toccare qualsiasi cosa se non si è su `main`, ci sono modifiche non committate, `main` è
+indietro rispetto a GitHub, il server non si raggiunge o i test (`npm run check`, `cargo test` dell'app e del
+server) non passano. Poi controlla, nell'ordine, le due cose che poi aggiorna:
+
+1. **Server della chat**: va aggiornato se `server/` è cambiato dal commit da cui è compilato (lo tiene in
+   `~/postamon-interno/commit`), se quel commit non si sa o se il server non risponde. Viene prima perché l'app
+   nuova può averne bisogno, ed è lui a distribuirla.
+2. **App**: sul server deve esserci l'ultima versione. Se ci sono commit dell'app dopo l'ultimo tag `v*` serve una
+   versione nuova; se l'ultimo tag non è mai arrivato sul server (un ship interrotto, un invio fallito) va
+   ripubblicato, con l'installer già compilato o ricompilandolo uguale. Se l'app non è cambiata non si fa una
+   versione nuova: i colleghi reinstallerebbero la stessa.
+
+Mostra cosa farà e, con la conferma, pusha `main` e poi:
+
+1. server: lo compila per Linux, lo carica, lo riavvia e controlla che risponda; se non risponde rimette da solo
+   quello di prima (`postamon-interno.prima`);
+2. app: scrive la versione, compila l'installer firmato, fa il commit `Postamon x.y.z` e il tag `vx.y.z`, li pusha
+   e carica installer e `latest.json` sul server.
+
+`pm rollback app` non riporta indietro chi si è già aggiornato (Postamon non torna a una versione più vecchia):
+ferma la versione per gli altri. Per correggerla si pubblica una versione nuova.
+
+Il motore della compilazione è `scripts\pubblica.ps1`, che si può usare anche da solo:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\pubblica.ps1 -Versione 0.2.0 -Note "Cosa cambia"
 ```
 
-Compila in `src-tauri\target\dist` (non tocca un Postamon aperto da `target\release`); l'installer da dare ai
-colleghi è `src-tauri\target\dist\release\bundle\nsis\Postamon_<versione>_x64-setup.exe`. Sul server i file
-stanno in `~/postamon-interno/dati/aggiornamenti/`; `latest.json` si carica per ultimo e porta solo il nome
-dell'installer, che il server completa con il proprio indirizzo. `-SenzaInvio` si ferma dopo la compilazione.
+Scrive la versione (`tauri.conf.json`, `Cargo.toml`, `package.json`, `package-lock.json`) e compila in
+`src-tauri\target\dist` (non tocca un Postamon aperto da `target\release`); l'installer da dare ai colleghi è
+`src-tauri\target\dist\release\bundle\nsis\Postamon_<versione>_x64-setup.exe`. Sul server i file stanno in
+`~/postamon-interno/dati/aggiornamenti/`; `latest.json` si carica per ultimo e porta solo il nome
+dell'installer, che il server completa con il proprio indirizzo, e quello di prima resta in `latest.prima.json`.
+`-SenzaInvio` si ferma dopo la compilazione, `-SoloInvio` carica una versione già compilata.
 
 ### Configurazione locale
 
@@ -73,8 +147,8 @@ git (modello in `postamon.esempio.json`):
 - `serverChat`: server della chat proposto all'attivazione e usato per gli aggiornamenti finché nessuna casella è
   collegata. Lo legge `src-tauri/build.rs` alla compilazione (la variabile `POSTAMON_SERVER_CHAT` ha la
   precedenza); senza, l'utente lo scrive nella schermata "Attiva la chat".
-- `utenteSsh`, `chiaveSsh`: accesso al server per `scripts\pubblica.ps1` (sovrascrivibili con `-Server`, `-Utente`,
-  `-ChiaveSsh`). Il server è l'host di `serverChat`.
+- `utenteSsh`, `chiaveSsh`: accesso al server per `scripts/pm` e `scripts\pubblica.ps1` (in questo sovrascrivibili
+  con `-Server`, `-Utente`, `-ChiaveSsh`). Il server è l'host di `serverChat`.
 
 ## Server delle caselle aziendali
 
@@ -91,14 +165,28 @@ Sull'SMTP la porta 587 (e la 25) usa STARTTLS, tutte le altre la connessione cif
 
 ```sh
 npm install
-npm run tauri dev          # app con ricarica automatica
+pm dev                     # Postamon Dev, con ricarica automatica (uguale a: npm run app)
 npm run check              # controllo dei tipi TypeScript
 cd src-tauri && cargo test # test del motore
 npx tauri build --no-bundle  # src-tauri/target/release/postamon.exe (senza installer né firma)
 ```
 
-`POSTAMON_DATA_DIR=<cartella>` fa usare all'app una cartella dati diversa da quella vera
-(`%APPDATA%\it.dimensionesalotto.postamon`), utile per le prove.
+**Postamon Dev** è l'app di sviluppo: `tauri dev` con `src-tauri/tauri.dev.conf.json`. Ha lo stesso logo in arancio e
+viola (`src-tauri/icons-dev/`), il titolo "Postamon Dev" e un identificativo suo
+(`it.dimensionesalotto.postamon.dev`), quindi gira accanto al Postamon installato senza toccarlo:
+
+- cartella dati propria, `%APPDATA%\it.dimensionesalotto.postamon.dev`. La prima volta parte con le caselle del
+  Postamon installato (copia il suo `accounts.json`: l'elenco e le firme, non la posta, che riscarica);
+- le compilazioni di sviluppo tengono password e accesso alla chat sotto altri nomi nella Gestione credenziali
+  (`Postamon Dev`, `Postamon Dev-interno`). Finché una casella non ha una password sua, usano quella del Postamon
+  installato, solo in lettura: togliere o cambiare una casella in Postamon Dev non tocca l'installato;
+- si collegano a Claude come `postamon-dev`, non si aggiornano da sole e non si registrano per i link email.
+
+L'interfaccia si aggiorna a ogni salvataggio senza riavviare; una modifica al Rust ricompila e riapre la finestra.
+`npm run tauri dev` senza la configurazione di sviluppo avrebbe l'identificativo del Postamon installato: se quello
+è aperto, si limita a portarlo in primo piano.
+
+`POSTAMON_DATA_DIR=<cartella>` fa usare all'app una cartella dati diversa, utile per le prove.
 
 ### Prova completa con un server di posta di test
 
@@ -109,7 +197,7 @@ docker run -d --name postamon-greenmail -p 3993:3993 -p 3465:3465 \
 cd src-tauri
 POSTAMON_E2E=1 cargo test e2e                       # invio, sincronizzazione, apertura, flag, inviata, cestino
 POSTAMON_SEED=<cartella> cargo test seed_demo       # cartella dati con messaggi di esempio
-POSTAMON_DATA_DIR=<cartella> npm run tauri dev      # (dalla radice) l'app su quei dati
+POSTAMON_DATA_DIR=<cartella> npm run app            # (dalla radice) Postamon Dev su quei dati
 ```
 
 ## Struttura
@@ -118,13 +206,19 @@ POSTAMON_DATA_DIR=<cartella> npm run tauri dev      # (dalla radice) l'app su qu
 |---|---|
 | `src-tauri/src/imap.rs` | connessione, cartelle, sincronizzazione, flag, cestino, copia in inviata |
 | `src-tauri/src/smtp.rs` | composizione MIME e invio |
+| `src-tauri/src/signatures.rs` | elenco delle firme, pulizia dell'HTML, import da Outlook, immagini come `cid:` |
 | `src-tauri/src/render.rs` | lettura MIME, pulizia dell'HTML, testo per anteprime e citazioni |
-| `src-tauri/src/store.rs` | archivio locale SQLite |
+| `src-tauri/src/store.rs` | archivio locale SQLite, rubrica compresa |
 | `src-tauri/src/accounts.rs` | caselle e password |
 | `src-tauri/src/sync.rs` | controllo periodico e notifiche |
 | `src-tauri/src/update.rs` | aggiornamenti automatici dal server della chat |
+| `src-tauri/src/mailto.rs` | link email: lettura del link e registrazione in Windows |
+| `src-tauri/src/chrome.rs` | colore della barra del titolo di Windows |
 | `src-tauri/src/addons.rs` | add-on: catalogo firmato, installazione, server locale isolato, dati |
-| `scripts/pubblica.ps1` | installer firmato e pubblicazione di una versione |
+| `src-tauri/src/claude/` | Claude: server MCP (`--mcp`), strumenti, conferme, Claude Code e pannello |
+| `scripts/pm` | sviluppo e pubblicazione da terminale: `pm dev`, `pm status`, `pm ship`, `pm rollback` |
+| `scripts/pubblica.ps1` | installer firmato e pubblicazione di una versione (lo usa `pm ship`) |
+| `src-tauri/tauri.dev.conf.json`, `src-tauri/icons-dev/` | Postamon Dev: nome, identificativo e logo dell'app di sviluppo |
 | `src-tauri/src/commands.rs` | comandi chiamati dall'interfaccia |
 | `src/` | interfaccia React |
 | `addons/` | sorgenti degli add-on (non entrano nella build) |
@@ -162,7 +256,9 @@ tengono acceso `avvia.sh` (nel crontab dell'utente: `@reboot` e ogni 5 minuti) e
 aggiornamento. Gli utenti di prova facoltativi (`[[local_users]]`) hanno le password solo nel file di
 configurazione sul server.
 
-Aggiornare il server (`<utente>@<server>` e la chiave come in `postamon.local.json`):
+Aggiornare il server: `pm server` (o `pm ship`, che lo aggiorna quando `server/` è cambiato) compila, carica,
+riavvia, controlla che risponda e tiene il server di prima per `pm rollback server`. A mano
+(`<utente>@<server>` e la chiave come in `postamon.local.json`):
 
 ```sh
 cd server
@@ -202,6 +298,37 @@ segue [ADDONS.md](ADDONS.md) e propone una pull request; come contribuire in gen
 `POSTAMON_ADDONS_URL=<cartella con addons.json>/` fa leggere a Postamon un catalogo diverso da quello pubblicato,
 per le prove (`scripts\pubblica-addon.ps1 -SenzaInvio` lo prepara in `dist-addons\`).
 
+## Claude
+
+Postamon usa Claude con l'**abbonamento dell'utente**, senza mai vedere l'account. Anthropic non permette alle app
+di terzi di offrire l'accesso con Claude né di usare i piani Free/Pro/Max al posto dell'utente
+([condizioni](https://code.claude.com/docs/en/legal-and-compliance)). L'abbonamento lo usano i programmi di
+Anthropic, e Postamon dà loro i suoi strumenti con il Model Context Protocol (MCP), `src-tauri/src/claude/`:
+
+- **Pannello «Claude»** (pulsante in alto a destra): avvia il Claude Code installato sul PC, così com'è, con
+  `claude -p` in streaming. Ha solo gli strumenti di Postamon: niente comandi, file o internet, niente impostazioni
+  né altri server MCP dell'utente. «Accedi» apre `claude auth login`. Il modello si sceglie in alto a destra nel
+  pannello (Haiku di base): cambiandolo, la conversazione continua con il nuovo modello.
+- **Claude Desktop e Claude Code**: «Collega», nelle impostazioni del pannello, aggiunge Postamon ai loro server MCP
+  (`claude_desktop_config.json`, con una copia di sicurezza, e `claude mcp add --scope user`). Avviano
+  `postamon.exe --mcp <cartella dei dati>`, che risponde da solo a `initialize` e `tools/list` e passa le chiamate
+  al Postamon aperto, aprendolo se è chiuso. Il passaggio avviene su un server locale con token (`claude/mcp.json`,
+  rinnovato a ogni avvio).
+- **Strumenti** (`tools.rs`): caselle, cartelle, elenco e ricerca nell'archivio, lettura di un messaggio (senza
+  segnarlo letto), messaggio aperto, bozza nella finestra di scrittura, invio, segna, sposta, cestina, add-on
+  (elenco, installa, togli, attiva) e «mostra in Postamon».
+- **Conferme** (`confirm.rs`): il testo delle email arriva a Claude e può contenere istruzioni di chiunque.
+  Per questo inviare, spostare, cestinare e installare o togliere add-on si confermano in Postamon, in una finestra
+  che mostra tutto (per un invio anche «Modifica»). Lo strumento aspetta 45 s; se nessuno risponde, restituisce il
+  numero della richiesta, da controllare con `request_status`. Il collegamento resta spento finché l'utente non
+  lo accende.
+- **Prima di distribuire il pannello**: Anthropic chiede a chi esegue Claude Code dentro un proprio prodotto di
+  accettare i [Commercial Terms](https://www.anthropic.com/legal/commercial-terms). Ogni utente entra con il
+  proprio account Claude.
+
+`POSTAMON_CLAUDE_DESKTOP=<file>` fa usare a Postamon un file di configurazione di Claude Desktop di prova al posto
+di quello vero.
+
 ## Prossime fasi
 
 - Chat interna in uso: spostare il server su una macchina dedicata vicino al controller di dominio.
@@ -236,7 +363,8 @@ Postamon si appoggia alle app [ArtCraft](https://getartcraft.com) (github.com/st
 | mp4, mov, webm… | FilmCraft |
 | dxf, dwg | CADCraft |
 
-Prova nell'app senza server di posta: `POSTAMON_SEED_OFFLINE=<cartella> cargo test seed_offline` crea una
+Prova nell'app senza server di posta (con cinque contatti in rubrica, uno è il mittente di una mail):
+`POSTAMON_SEED_OFFLINE=<cartella> cargo test seed_offline` crea una
 cartella dati con due messaggi (un PDF e una foto); poi `POSTAMON_DATA_DIR=<cartella>` sull'eseguibile.
 
 Banco di prova delle anteprime nel browser:

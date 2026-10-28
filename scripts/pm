@@ -1,0 +1,693 @@
+#!/usr/bin/env bash
+#
+# pm — sviluppo e pubblicazione di Postamon da terminale (Git Bash).
+#
+#   pm dev                  Postamon Dev: l'app di sviluppo, con il logo arancio e viola,
+#                           che si ricarica mentre scrivi il codice
+#   pm status               versione, cosa c'e' da pubblicare, cosa gira sul server
+#   pm ship [livello]       pubblica a tutti cio' che e' in main: il server della chat se
+#                           e' cambiato, poi la nuova versione dell'app
+#   pm server               solo il server della chat
+#   pm rollback <server|app>
+#   pm help
+#
+# La prova si fa in locale con pm dev: ship va dritto ai colleghi. Server, utente e
+# chiave SSH vengono da postamon.local.json (fuori da git, modello in
+# postamon.esempio.json).
+
+set -euo pipefail
+
+REMOTE=origin
+MAIN=main
+SERVER_DIR=postamon-interno                 # sul server, nella home dell'utente SSH
+UPDATES_DIR=$SERVER_DIR/dati/aggiornamenti
+SERVER_TARGET=x86_64-unknown-linux-musl
+SIGN_KEY="$HOME/.tauri/postamon.key"
+
+# File in cui pubblica.ps1 scrive la versione (Cargo.lock lo aggiorna la compilazione)
+VERSION_FILES=(src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock package.json package-lock.json)
+
+# Cosa entra nell'installer dell'app. Configurazione e logo di Postamon Dev no.
+APP_PATHS=(src src-tauri sdk public index.html package.json package-lock.json vite.config.ts
+	tsconfig.json tsconfig.node.json ':!src-tauri/tauri.dev.conf.json' ':!src-tauri/icons-dev')
+
+# ─── output ────────────────────────────────────────────────────────────────────
+if [ -t 1 ]; then
+	B=$'\033[1m'; R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; D=$'\033[2m'; N=$'\033[0m'
+else
+	B=''; R=''; G=''; Y=''; D=''; N=''
+fi
+info() { printf '%s\n' "$*"; }
+step() { printf '%s→%s %s\n' "$D" "$N" "$*"; }
+ok()   { printf '%s✓%s %s\n' "$G" "$N" "$*"; }
+warn() { printf '%s!%s %s\n' "$Y" "$N" "$*"; }
+die()  { printf '%s✗ %s%s\n' "$R" "$*" "$N" >&2; exit 1; }
+
+# Righe in grigio e rientrate, al massimo $1. Legge tutto l'ingresso: con head
+# chi scrive nella pipe potrebbe prendersi un SIGPIPE, e con pipefail si esce.
+list() { sed -n "1,${1}p" | sed "s/^/    $D/;s/\$/$N/"; }
+
+# Lo script lavora sempre nel repo in cui vive, da qualunque cartella lo si lanci.
+top=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+cd "$top"
+
+# Le conferme le da' una persona da terminale. Se il comando lo guida Claude la
+# conferma e' gia' stata data in chat e arriva come PM_ASSUME_YES=1; senza
+# terminale e senza quella variabile ci si ferma, invece di restare appesi.
+confirm() {
+	if [ "${PM_ASSUME_YES:-}" = "1" ]; then
+		printf '%s(confermato via PM_ASSUME_YES)%s\n' "$D" "$N"
+		return 0
+	fi
+	[ -t 0 ] || die "Serve una conferma ma non c'e' un terminale interattivo.
+  Rilancia da terminale, oppure con PM_ASSUME_YES=1 se la conferma l'hai gia' data."
+	printf '%s [scrivi si] ' "$1"
+	local a; read -r a
+	# si, SI, sì, anche con spazi intorno (in Git Bash ${a,,} rompe la ì)
+	a=$(printf '%s' "$a" | tr -d '[:space:]' | tr 'A-Z' 'a-z')
+	case "$a" in
+		si|sì|sÌ) ;;
+		*) die "Annullato.${2:+
+  $2}" ;;
+	esac
+}
+
+# Un campo di primo livello da un JSON letto da stdin, vuoto se manca (in Git Bash non c'e' jq)
+jget() {
+	node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s.replace(/^﻿/,""))[process.argv[1]];console.log(v===undefined||v===null?"":v)}catch(e){console.log("")}})' "$1"
+}
+
+# ─── configurazione e server ───────────────────────────────────────────────────
+SERVER=""; PORT=""; SSH_USER=""; SSH_KEY=""
+load_config() {
+	[ -f postamon.local.json ] || die "Manca postamon.local.json: copialo da postamon.esempio.json e compilalo."
+	local chat
+	chat=$(jget serverChat < postamon.local.json)
+	SERVER=${chat%%:*}
+	PORT=${chat##*:}
+	[ "$PORT" != "$chat" ] || PORT=8790
+	SSH_USER=$(jget utenteSsh < postamon.local.json)
+	SSH_KEY=$(jget chiaveSsh < postamon.local.json)
+	SSH_KEY=${SSH_KEY//\\//}
+	SSH_KEY=${SSH_KEY/#\~/$HOME}
+	[ -n "$SERVER" ] && [ -n "$SSH_USER" ] && [ -n "$SSH_KEY" ] \
+		|| die "postamon.local.json deve avere serverChat, utenteSsh e chiaveSsh (vedi postamon.esempio.json)."
+	[ -f "$SSH_KEY" ] || die "Chiave SSH non trovata: $SSH_KEY"
+}
+
+remote() { ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$SSH_USER@$SERVER" "$@"; }
+
+require_server() {
+	step "controllo il server ($SERVER)"
+	remote true 2>/dev/null || die "Non raggiungo $SSH_USER@$SERVER: sei in rete aziendale o in VPN?"
+}
+
+UPDATES_URL() { echo "https://$SERVER:$PORT/api/aggiornamenti/latest.json"; }
+
+# Il server della chat risponde? 200 o 204 (niente di pubblicato) vuol dire si'.
+# Il certificato e' autofirmato: Postamon ne fissa l'impronta, qui basta -k.
+http_code() {
+	local code
+	code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 8 "$(UPDATES_URL)") || true
+	echo "${code:-000}"
+}
+
+# Versione che i Postamon installati vedono, vuota se niente o server spento
+published_version() { curl -sk --max-time 8 "$(UPDATES_URL)" 2>/dev/null | jget version || true; }
+
+# Versione di un file in aggiornamenti/ sul server (latest.prima.json, latest.scartato.json)
+server_file_version() { remote "cat $UPDATES_DIR/$1 2>/dev/null" 2>/dev/null | jget version || true; }
+
+# Commit da cui e' stato compilato il server della chat in funzione, vuoto se non si sa
+server_commit() { remote "cat $SERVER_DIR/commit 2>/dev/null" 2>/dev/null | tr -d '[:space:]' || true; }
+
+# ─── git ───────────────────────────────────────────────────────────────────────
+require_main() {
+	local b; b=$(git rev-parse --abbrev-ref HEAD)
+	[ "$b" = "$MAIN" ] || die "Sei su '$b': si pubblica da $MAIN."
+}
+
+require_clean() {
+	if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+		printf '%s✗ Ci sono modifiche non committate: non partirebbero.%s\n\n' "$R" "$N" >&2
+		git status --short >&2
+		printf '\nCommittale, oppure mettile da parte con "git stash".\n' >&2
+		exit 1
+	fi
+}
+
+fetch() { step "aggiorno i riferimenti da $REMOTE"; git fetch "$REMOTE" --prune --tags --quiet; }
+
+# Commit di main non ancora su origin. Si ferma se main e' indietro.
+ahead_count() {
+	local behind
+	behind=$(git rev-list --count "HEAD..$REMOTE/$MAIN")
+	[ "$behind" -eq 0 ] || die "$MAIN locale e' $behind commit indietro rispetto a $REMOTE/$MAIN: prima git pull."
+	git rev-list --count "$REMOTE/$MAIN..HEAD"
+}
+
+last_tag() { git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true; }
+
+# Commit che toccano l'app dall'ultimo rilascio (tutti, se non ce n'e' ancora uno)
+app_log() {
+	if [ -n "$1" ]; then git log --oneline --no-merges "$1..HEAD" -- "${APP_PATHS[@]}"
+	else git log --oneline --no-merges HEAD -- "${APP_PATHS[@]}"; fi
+}
+
+# Il server della chat e' aggiornato e acceso? SRV=1 se va aggiornato, con il
+# perche' in SRV_MOTIVO: non si sa da che commit viene quello in funzione, da
+# allora server/ e' cambiato, oppure non risponde. SC e' il commit in funzione.
+SC=""; SRV=0; SRV_MOTIVO=""; SRV_HTTP=""
+server_plan() {
+	SC=$(server_commit)
+	SRV=0
+	SRV_MOTIVO=""
+	SRV_HTTP=$(http_code)
+	if [ -z "$SC" ] || ! git cat-file -e "$SC^{commit}" 2>/dev/null; then
+		SRV=1; SRV_MOTIVO="non so da che commit e' compilato"
+	elif ! git diff --quiet "$SC" HEAD -- server; then
+		SRV=1; SRV_MOTIVO="server/ e' cambiato dal ${SC:0:8}"
+	fi
+	case "$SRV_HTTP" in
+		200|204) ;;
+		*) SRV=1; SRV_MOTIVO="${SRV_MOTIVO:+$SRV_MOTIVO e }non risponde (HTTP $SRV_HTTP)" ;;
+	esac
+}
+
+code_version() { jget version < src-tauri/tauri.conf.json; }
+
+# ─── versioni ──────────────────────────────────────────────────────────────────
+newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]; }
+max_version() { printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1; }
+bump() {
+	local a b c
+	IFS=. read -r a b c <<< "$1"
+	case "$2" in
+		patch) c=$((c + 1)) ;;
+		minor) b=$((b + 1)); c=0 ;;
+		major) a=$((a + 1)); b=0; c=0 ;;
+	esac
+	echo "$a.$b.$c"
+}
+
+# Sul server c'e' l'ultima versione dell'app? APP vale
+#   nuova       ci sono commit dell'app dopo l'ultimo rilascio: serve una versione nuova
+#   ripubblica  l'ultimo rilascio (tag) non e' arrivato sul server: va caricato
+#   (vuota)     aggiornata
+# PUB e' la versione nel latest.json sul server (letto dal disco: vale anche a
+# server spento), REL quella dell'ultimo tag, RITIRATA quella tolta con pm rollback app.
+TAG=""; REL=""; PUB=""; RITIRATA=""; APP=""; APP_COMMITS=""
+app_plan() {
+	TAG=$(last_tag)
+	REL=${TAG#v}
+	PUB=$(server_file_version latest.json)
+	RITIRATA=$(server_file_version latest.scartato.json)
+	APP_COMMITS=$(app_log "$TAG")
+	APP=""
+	if [ -n "$APP_COMMITS" ]; then
+		APP=nuova
+	elif [ -n "$REL" ] && newer "$REL" "${PUB:-0.0.0}" && [ "$REL" != "$RITIRATA" ]; then
+		APP=ripubblica
+	fi
+}
+
+# La nuova versione: dal livello dato, o scelta da un elenco
+choose_version() {
+	local base="$1" livello="$2" scelta
+	case "$livello" in
+		patch|minor|major) bump "$base" "$livello"; return 0 ;;
+		"") ;;
+		*) echo "$livello"; return 0 ;;
+	esac
+	[ -t 0 ] || die "Senza terminale non posso chiederti la versione: pm ship <patch|minor|major|x.y.z>"
+	{
+		echo
+		info "${B}Che versione e'?${N} (ora $base)"
+		info "  1) $(bump "$base" patch)   correzioni e ritocchi"
+		info "  2) $(bump "$base" minor)   funzioni nuove"
+		info "  3) $(bump "$base" major)   cambi grossi"
+		printf 'Numero (invio = 1): '
+	} >&2
+	read -r scelta
+	case "${scelta:-1}" in
+		1) bump "$base" patch ;;
+		2) bump "$base" minor ;;
+		3) bump "$base" major ;;
+		*) die "Scelta non valida: '$scelta'." ;;
+	esac
+}
+
+# ─── dev ───────────────────────────────────────────────────────────────────────
+cmd_dev() {
+	if [ ! -d node_modules ]; then
+		step "npm install"
+		npm install
+	fi
+	info "Avvio ${B}Postamon Dev${N}: logo arancio e viola, dati e password suoi, niente aggiornamenti."
+	info "${D}L'interfaccia si aggiorna da sola a ogni salvataggio; una modifica al Rust ricompila e riapre la finestra.${N}"
+	exec npx tauri dev --config src-tauri/tauri.dev.conf.json "$@"
+}
+
+# ─── status ────────────────────────────────────────────────────────────────────
+cmd_status() {
+	load_config
+	fetch
+	local n ahead
+	app_plan
+	info "${B}Codice${N}          $(code_version) ${D}(ultimo rilascio: ${TAG:-nessun tag})${N}"
+
+	ahead=$(git rev-list --count "$REMOTE/$MAIN..HEAD" 2>/dev/null || echo 0)
+	local behind; behind=$(git rev-list --count "HEAD..$REMOTE/$MAIN" 2>/dev/null || echo 0)
+	if [ "$behind" -gt 0 ]; then warn "$MAIN e' $behind commit indietro rispetto a $REMOTE: git pull"
+	elif [ "$ahead" -gt 0 ]; then info "${B}GitHub${N}          $ahead commit ancora da pushare"
+	else info "${B}GitHub${N}          in pari"; fi
+	n=$(git status --porcelain | wc -l)
+	[ "$n" -eq 0 ] || warn "$n file con modifiche non committate (ship non parte finche' ci sono)"
+
+	# Nello stesso ordine di pm ship: prima il server della chat, poi l'app
+	echo
+	server_plan
+	case "$SRV_HTTP" in
+		200|204) info "${B}1. Server chat${N}  acceso ${D}(HTTP $SRV_HTTP)${N}" ;;
+		*) warn "${B}1. Server chat${N}  non risponde (HTTP $SRV_HTTP)" ;;
+	esac
+	if [ "$SRV" -eq 0 ]; then
+		ok "aggiornato (${SC:0:8})"
+	else
+		info "  ${Y}da aggiornare${N}: $SRV_MOTIVO"
+		if [ -n "$SC" ] && git cat-file -e "$SC^{commit}" 2>/dev/null; then
+			git log --oneline --no-merges "$SC..HEAD" -- server | list 10
+		fi
+	fi
+
+	echo
+	info "${B}2. App${N}          sul server la ${PUB:-nessuna versione} ${D}($(UPDATES_URL))${N}"
+	case "$APP" in
+		nuova)
+			info "  ${Y}da rilasciare${N}: $(printf '%s\n' "$APP_COMMITS" | wc -l) commit${TAG:+ dopo il $TAG}"
+			printf '%s\n' "$APP_COMMITS" | list 10 ;;
+		ripubblica)
+			info "  ${Y}da ripubblicare${N}: l'ultimo rilascio ($TAG) non e' arrivato sul server" ;;
+		*)
+			if [ -n "$REL" ] && [ "$REL" = "$RITIRATA" ]; then
+				warn "la $REL e' stata ritirata (pm rollback app): il prossimo ship ne fa una nuova, quando ci sono modifiche"
+			else
+				ok "aggiornata"
+			fi ;;
+	esac
+}
+
+# ─── server della chat ─────────────────────────────────────────────────────────
+# cargo zigbuild vuole zig nel PATH; installato con pip sta fra i pacchetti di Python.
+ensure_zig() {
+	command -v zig >/dev/null 2>&1 && return 0
+	local d
+	for d in "$HOME"/AppData/Roaming/Python/Python3*/site-packages/ziglang \
+		"$HOME"/AppData/Local/Programs/Python/Python3*/Lib/site-packages/ziglang; do
+		if [ -x "$d/zig.exe" ]; then PATH="$PATH:$d"; return 0; fi
+	done
+	die "Manca zig, che serve per compilare il server per Linux: pip install ziglang"
+}
+
+wait_server_up() {
+	local code="" i
+	for i in $(seq 1 15); do
+		code=$(http_code)
+		case "$code" in 200|204) echo "$code"; return 0 ;; esac
+		sleep 1
+	done
+	echo "$code"
+	return 1
+}
+
+# Compila, carica e riavvia il server della chat. Quello di prima resta in
+# postamon-interno.prima: se il nuovo non risponde torna da solo.
+deploy_server() {
+	ensure_zig
+	local sha bin code
+	sha=$(git rev-parse HEAD)
+	bin="server/target/$SERVER_TARGET/release/postamon-interno"
+
+	step "compilo il server della chat per Linux"
+	(cd server && cargo zigbuild --release --target "$SERVER_TARGET" -q) \
+		|| die "Compilazione del server non riuscita: sul server non e' cambiato niente."
+
+	step "carico il server"
+	scp -q -i "$SSH_KEY" -o BatchMode=yes "$bin" "$SSH_USER@$SERVER:$SERVER_DIR/postamon-interno.nuovo" \
+		|| die "Invio del server non riuscito: sul server non e' cambiato niente."
+	scp -q -i "$SSH_KEY" -o BatchMode=yes server/deploy/avvia.sh server/deploy/riavvia.sh "$SSH_USER@$SERVER:$SERVER_DIR/" \
+		|| die "Invio di avvia.sh e riavvia.sh non riuscito: il server in funzione non e' cambiato."
+
+	# scp da Windows non porta il permesso di esecuzione: senza chmod non riparte
+	step "riavvio il server"
+	remote "cd $SERVER_DIR && chmod +x postamon-interno.nuovo avvia.sh riavvia.sh \
+		&& { [ ! -f postamon-interno ] || cp -p postamon-interno postamon-interno.prima; } \
+		&& { [ ! -f commit ] || cp -p commit commit.prima; } \
+		&& mv postamon-interno.nuovo postamon-interno && ./riavvia.sh </dev/null" \
+		|| die "Riavvio non riuscito: controlla il server (pm status), e se serve pm rollback server."
+
+	if ! code=$(wait_server_up); then
+		warn "Il server nuovo non risponde (HTTP $code): rimetto quello di prima."
+		restore_server && warn "Rimesso quello di prima." || warn "Anche il ritorno indietro non e' riuscito: intervieni a mano sul server."
+		exit 1
+	fi
+	remote "echo $sha > $SERVER_DIR/commit"
+	ok "Server della chat aggiornato a ${sha:0:8} (HTTP $code)"
+}
+
+restore_server() {
+	remote "cd $SERVER_DIR && [ -f postamon-interno.prima ] \
+		&& mv postamon-interno postamon-interno.scartato && mv postamon-interno.prima postamon-interno \
+		&& { if [ -f commit.prima ]; then mv commit.prima commit; else rm -f commit; fi; } \
+		&& ./riavvia.sh </dev/null" || return 1
+	wait_server_up >/dev/null
+}
+
+cmd_server() {
+	require_main
+	require_clean
+	load_config
+	fetch
+	local ahead
+	ahead=$(ahead_count)
+	require_server
+	server_plan
+	if [ "$SRV" -eq 0 ]; then
+		ok "Il server della chat e' gia' aggiornato (${SC:0:8}) e risponde: niente da fare."
+		return 0
+	fi
+	step "test del server (cargo test)"
+	(cd server && cargo test -q) || die "Test del server non passati: non pubblico niente."
+
+	echo
+	info "${B}Stai per aggiornare il server della chat${N} ${D}($SRV_MOTIVO; lo compilo da $(git rev-parse --short HEAD))${N}"
+	if [ -n "$SC" ] && git cat-file -e "$SC^{commit}" 2>/dev/null; then
+		git log --oneline --no-merges "$SC..HEAD" -- server | list 12
+	fi
+	[ "$ahead" -eq 0 ] || info "  e prima pusho $ahead commit su $REMOTE/$MAIN"
+	echo
+	confirm "Confermi?"
+	if [ "$ahead" -gt 0 ]; then
+		step "push di $MAIN"
+		git push --quiet "$REMOTE" "$MAIN"
+	fi
+	deploy_server
+}
+
+# ─── app ───────────────────────────────────────────────────────────────────────
+# MSYS2_ARG_CONV_EXCL: una nota che inizia con / non diventa un percorso di Windows
+ps1() { MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/pubblica.ps1 "$@"; }
+
+# Carica installer e latest.json di una versione gia' compilata e taggata
+upload_app() {
+	local v="$1" now
+	step "carico installer e latest.json sul server"
+	ps1 -Versione "$v" -SoloInvio \
+		|| die "Invio non riuscito: la $v e' taggata ma non pubblicata. Rilancia pm ship, riprende da qui."
+	now=$(published_version)
+	[ "$now" = "$v" ] || die "Il server dice '${now:-nessuna versione}', non la $v. Controlla con pm status."
+	ok "Postamon $v pubblicata"
+}
+
+# Compila, committa e tagga la versione, pusha, poi la carica sul server
+release_app() {
+	local v="$1" nota="$2"
+	local args=(-Versione "$v" -SenzaInvio)
+	[ -z "$nota" ] || args+=(-Note "$nota")
+	step "compilo l'installer firmato di Postamon $v (qualche minuto)"
+	if ! ps1 "${args[@]}"; then
+		git checkout --quiet -- "${VERSION_FILES[@]}"
+		die "Compilazione non riuscita: versione riportata a com'era, niente pubblicato."
+	fi
+
+	step "commit e tag v$v"
+	git add -- "${VERSION_FILES[@]}"
+	if [ -n "$nota" ]; then
+		git commit --quiet -m "Postamon $v" -m "$nota"
+		git tag -a "v$v" -m "Postamon $v" -m "$nota"
+	else
+		git commit --quiet -m "Postamon $v"
+		git tag -a "v$v" -m "Postamon $v"
+	fi
+
+	step "push di $MAIN e del tag"
+	git push --quiet --atomic "$REMOTE" "$MAIN" "v$v" \
+		|| die "Push non riuscito: la $v e' compilata e taggata ma non pubblicata. Sistema il push, poi rilancia pm ship: riprende da qui."
+
+	upload_app "$v"
+}
+
+# L'ultimo rilascio e' taggato ma il server non ce l'ha (un ship interrotto dopo
+# il tag, un invio non riuscito). Da allora l'app non e' cambiata, quindi si
+# carica l'installer gia' compilato; se non c'e' piu' lo si ricompila uguale.
+republish_app() {
+	local v="$1" bundle="src-tauri/target/dist/release/bundle/nsis"
+	if [ ! -f "$bundle/Postamon_${v}_x64-setup.exe" ] || [ "$(jget version < "$bundle/latest.json" 2>/dev/null)" != "$v" ]; then
+		local nota args=(-Versione "$v" -SenzaInvio)
+		nota=$(git tag -l --format='%(contents:body)' "v$v" | tr '\n' ' ' | sed 's/ *$//')
+		[ -z "$nota" ] || args+=(-Note "${nota//\"/\'}")
+		step "ricompilo l'installer della $v (qualche minuto)"
+		ps1 "${args[@]}" || { git checkout --quiet -- "${VERSION_FILES[@]}"; die "Compilazione non riuscita: niente pubblicato."; }
+		# La versione nel codice era gia' la $v: niente da committare
+		git checkout --quiet -- "${VERSION_FILES[@]}"
+	fi
+	step "push del tag v$v"
+	git push --quiet "$REMOTE" "v$v" || die "Push del tag non riuscito: niente pubblicato."
+	upload_app "$v"
+}
+
+# ─── ship ──────────────────────────────────────────────────────────────────────
+cmd_ship() {
+	local livello="" nota="" con_nota=0
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			-m|--nota)
+				[ "$#" -ge 2 ] || die "Dopo $1 va la nota, tra virgolette."
+				nota="$2"; con_nota=1; shift 2 ;;
+			patch|minor|major) livello="$1"; shift ;;
+			[0-9]*.[0-9]*.[0-9]*)
+				[[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Versione non valida: '$1' (forma 0.2.0)."
+				livello="$1"; shift ;;
+			*) die "Argomento non valido: '$1'. Uso: pm ship [patch|minor|major|x.y.z] [-m \"nota\"]" ;;
+		esac
+	done
+
+	require_main
+	require_clean
+	load_config
+	[ -f "$SIGN_KEY" ] || die "Manca la chiave degli aggiornamenti: $SIGN_KEY"
+	fetch
+	local ahead; ahead=$(ahead_count)
+	require_server
+
+	# I due controlli, nell'ordine in cui poi si aggiorna: prima il server della
+	# chat (l'app nuova puo' averne bisogno, ed e' lui a distribuirla), poi l'app.
+	step "1. server della chat: aggiornato e acceso?"
+	server_plan
+	if [ "$SRV" -eq 0 ]; then ok "aggiornato (${SC:0:8}) e acceso"; else info "  ${Y}da aggiornare${N}: $SRV_MOTIVO"; fi
+	step "2. app: sul server c'e' l'ultima versione?"
+	app_plan
+	case "$APP" in
+		nuova) info "  ${Y}da rilasciare${N}: commit dell'app${TAG:+ dopo il $TAG} (sul server la ${PUB:-nessuna versione})" ;;
+		ripubblica) info "  ${Y}da ripubblicare${N}: l'ultimo rilascio ($TAG) non e' sul server, che ha la ${PUB:-nessuna versione}" ;;
+		*) ok "aggiornata (sul server la ${PUB:-nessuna versione})" ;;
+	esac
+
+	if [ "$SRV" -eq 0 ] && [ -z "$APP" ]; then
+		echo
+		ok "Niente da pubblicare: server della chat e app sono aggiornati."
+		if [ "$ahead" -gt 0 ]; then
+			info "  ${D}$ahead commit su $MAIN non toccano ne' l'app ne' il server: git push per mandarli su GitHub.${N}"
+		fi
+		return 0
+	fi
+
+	local nuova=""
+	if [ "$APP" = nuova ]; then
+		local cur; cur=$(code_version)
+		nuova=$(choose_version "$(max_version "$cur" "${PUB:-0.0.0}")" "$livello")
+		newer "$nuova" "${PUB:-0.0.0}" \
+			|| die "La $nuova non e' piu' nuova di quella sul server (${PUB}): i Postamon installati non la prenderebbero."
+		[ "$nuova" = "$cur" ] || newer "$nuova" "$cur" || die "La $nuova e' piu' vecchia di quella nel codice ($cur)."
+		git rev-parse -q --verify "refs/tags/v$nuova" >/dev/null && die "Il tag v$nuova esiste gia'."
+		if [ "$con_nota" -eq 0 ] && [ -t 0 ]; then
+			echo
+			info "Nota per i colleghi: compare nel ${B}?${N} accanto a \"Postamon $nuova e' pronto\"."
+			printf 'Cosa cambia, in una riga (invio per nessuna): '
+			read -r nota
+		fi
+		# Le virgolette doppie non arrivano intere a PowerShell
+		nota=${nota//\"/\'}
+	elif [ -n "$livello" ]; then
+		warn "L'app non e' cambiata dall'ultimo rilascio: la versione ($livello) non serve."
+	fi
+
+	# Prove prima di chiedere conferma: se non passano non si tocca niente. Una
+	# ripubblicazione no: e' il codice del rilascio, gia' provato allora.
+	if [ "$APP" = nuova ]; then
+		step "controllo dei tipi dell'interfaccia (npm run check)"
+		npm run --silent check || die "Errori di TypeScript: non pubblico niente."
+		# --lib: le prove stanno tutte nella libreria, e cosi' non si ricompila
+		# postamon.exe, che Postamon Dev tiene aperto mentre gira
+		step "test del motore (cargo test)"
+		(cd src-tauri && cargo test --lib -q) || die "Test del motore non passati: non pubblico niente."
+	fi
+	if [ "$SRV" -eq 1 ]; then
+		step "test del server (cargo test)"
+		(cd server && cargo test -q) || die "Test del server non passati: non pubblico niente."
+	fi
+
+	echo
+	info "${B}Stai per pubblicare a tutti:${N}"
+	if [ "$SRV" -eq 1 ]; then
+		info "  ${B}1. Server della chat${N}, compilato da $(git rev-parse --short HEAD) ${D}($SRV_MOTIVO)${N}"
+		if [ -n "$SC" ] && git cat-file -e "$SC^{commit}" 2>/dev/null; then
+			git log --oneline --no-merges "$SC..HEAD" -- server | list 8
+		fi
+	else
+		info "  ${D}1. Server della chat: gia' aggiornato, non lo tocco${N}"
+	fi
+	case "$APP" in
+		nuova)
+			info "  ${B}2. Postamon $nuova${N} ${D}(sul server ora: ${PUB:-nessuna})${N}"
+			[ -z "$nota" ] || info "    nota: $nota"
+			local n; n=$(printf '%s\n' "$APP_COMMITS" | wc -l)
+			printf '%s\n' "$APP_COMMITS" | list 12
+			[ "$n" -le 12 ] || info "    ${D}… e altri $((n - 12))${N}" ;;
+		ripubblica)
+			info "  ${B}2. Postamon $REL${N}, gia' rilasciata e mai arrivata sul server ${D}(che ha la ${PUB:-nessuna})${N}" ;;
+		*)
+			info "  ${D}2. App: gia' aggiornata, non la tocco${N}" ;;
+	esac
+	[ "$ahead" -eq 0 ] || info "  ${D}prima pusho $ahead commit su $REMOTE/$MAIN${N}"
+	echo
+	confirm "Confermi?"
+
+	if [ "$ahead" -gt 0 ]; then
+		step "push di $MAIN"
+		git push --quiet "$REMOTE" "$MAIN"
+	fi
+	if [ "$SRV" -eq 1 ]; then deploy_server; fi
+	case "$APP" in
+		nuova) release_app "$nuova" "$nota" ;;
+		ripubblica) republish_app "$REL" ;;
+	esac
+
+	echo
+	if [ -n "$APP" ]; then
+		info "I Postamon installati la vedono al prossimo controllo: 30 secondi dopo l'avvio, poi ogni 4 ore."
+		info "${D}Se qualcosa non va: pm rollback app la ferma per chi non l'ha ancora presa.${N}"
+	fi
+	if [ "$SRV" -eq 1 ]; then
+		info "${D}Se la chat non va: pm rollback server rimette il server di prima.${N}"
+	fi
+}
+
+# ─── rollback ──────────────────────────────────────────────────────────────────
+cmd_rollback() {
+	local cosa="${1:-}"
+	case "$cosa" in
+		server)
+			load_config
+			require_server
+			remote "test -f $SERVER_DIR/postamon-interno.prima" || die "Sul server non c'e' un server della chat precedente."
+			local prima; prima=$(remote "cat $SERVER_DIR/commit.prima 2>/dev/null" || true)
+			info "Rimetto il server della chat di prima ${D}(${prima:0:8})${N}."
+			confirm "Confermi?"
+			restore_server || die "Ritorno indietro non riuscito: intervieni a mano sul server."
+			ok "Server della chat di prima rimesso (HTTP $(http_code)). Il prossimo pm ship lo ricompila."
+			;;
+		app)
+			load_config
+			require_server
+			local pub prima
+			pub=$(published_version)
+			prima=$(server_file_version latest.prima.json)
+			[ -n "$prima" ] || die "Sul server non c'e' un latest.json precedente a cui tornare."
+			info "Pubblicata ora la ${B}$pub${N}: torno alla ${B}$prima${N}."
+			warn "Chi ha gia' preso la $pub se la tiene: Postamon non torna indietro da solo."
+			info "  Cosi' la $pub non arriva a nessun altro. Per correggerla: pm ship con una versione nuova."
+			confirm "Confermi?"
+			remote "cd $UPDATES_DIR && cp latest.json latest.scartato.json && mv latest.prima.json latest.json" \
+				|| die "Non sono riuscito a rimettere il latest.json di prima."
+			ok "Il server propone di nuovo la $(published_version)."
+			;;
+		*) die "uso: pm rollback <server|app>" ;;
+	esac
+}
+
+# ─── help ──────────────────────────────────────────────────────────────────────
+cmd_help() {
+	cat <<EOF
+${B}pm${N} — sviluppo e pubblicazione di Postamon
+
+${B}IL PERCORSO DI UNA MODIFICA${N}
+
+  1. pm dev        apri Postamon Dev e scrivi il codice: si aggiorna mentre salvi
+  2. provi in Postamon Dev, poi committi in $MAIN
+  3. pm ship       la pubblichi a tutti
+
+${B}COMANDI${N}
+
+  pm dev                  Postamon Dev, l'app di sviluppo: logo arancio e viola, titolo
+                          "Postamon Dev", cartella dati e password sue (la prima volta
+                          aggiungi le caselle), niente aggiornamenti automatici. Gira
+                          accanto al Postamon installato senza toccarlo.
+                          L'interfaccia si aggiorna da sola a ogni salvataggio; una
+                          modifica al Rust ricompila e riapre la finestra.
+  pm status               versione nel codice e pubblicata, commit da pubblicare,
+                          server della chat (acceso, aggiornato o no)
+  pm ship [livello]       pubblica a tutti, in quest'ordine:
+                            1. il server della chat, se non e' aggiornato o non risponde;
+                            2. l'app, se sul server non c'e' l'ultima versione.
+                          livello: patch, minor, major o una versione (0.3.0); senza,
+                          lo chiede. -m "nota" e' la riga che vedono i colleghi
+                          nell'avviso; senza, la chiede.
+  pm server               solo il server della chat
+  pm rollback server      rimette il server della chat di prima
+  pm rollback app         il server torna a proporre la versione di prima: chi si e'
+                          gia' aggiornato la tiene, gli altri non la ricevono
+  pm help                 questa pagina
+
+${B}COSA FA SHIP${N}
+
+  Si ferma prima di toccare qualsiasi cosa se: non sei su $MAIN, ci sono modifiche
+  non committate, $MAIN e' indietro rispetto a GitHub, il server non risponde,
+  i test non passano.
+
+  Poi fa due controlli, e li mostra prima di chiederti la conferma:
+
+    1. Server della chat: va aggiornato se server/ e' cambiato dal commit da cui
+       e' compilato (sta sul server, in postamon-interno/commit), se quel commit
+       non si sa o se il server non risponde.
+    2. App: va rilasciata una versione nuova se ci sono commit dell'app dopo
+       l'ultimo tag vx.y.z; va ripubblicata se l'ultimo tag non e' mai arrivato
+       sul server (un ship interrotto, un invio fallito). Se l'app non e'
+       cambiata non fa una versione nuova: i colleghi reinstallerebbero la stessa.
+
+  Con la tua conferma: pusha $MAIN, poi
+    1. server: compila per Linux, carica, riavvia, controlla che risponda; se
+       non risponde rimette da solo quello di prima;
+    2. app: scrive la versione, compila l'installer firmato, fa il commit
+       "Postamon x.y.z" e il tag vx.y.z, li pusha, carica installer e
+       latest.json (per ultimo) sul server.
+
+  I Postamon installati controllano 30 secondi dopo l'avvio e poi ogni 4 ore,
+  scaricano e mostrano "Riavvia e aggiorna".
+
+${B}DOVE SI LANCIA${N}
+
+  Da Git Bash, da qualunque cartella: lavora sempre nel repo in cui vive.
+  Server, utente e chiave SSH da postamon.local.json; serve la rete aziendale o la VPN.
+EOF
+}
+
+case "${1:-help}" in
+	dev)      shift; cmd_dev "$@" ;;
+	status)   cmd_status ;;
+	ship)     shift; cmd_ship "$@" ;;
+	server)   cmd_server ;;
+	rollback) shift; cmd_rollback "$@" ;;
+	help|-h|--help) cmd_help ;;
+	*) die "Comando sconosciuto: $1 (pm help)" ;;
+esac

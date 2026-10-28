@@ -5,9 +5,9 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -71,6 +71,115 @@ pub struct Summary {
     pub size: u32,
 }
 
+/// Contatto della rubrica di una casella.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Contact {
+    pub id: i64,
+    /// Sempre in minuscolo: è la chiave con cui si riconoscono i mittenti.
+    pub address: String,
+    pub name: String,
+    pub company: String,
+    pub phone: String,
+    pub notes: String,
+    /// Quando è entrato in rubrica, in secondi.
+    pub created: i64,
+    /// Il dominio è di un'azienda, non di un servizio di posta comune.
+    pub business: bool,
+}
+
+/// Scheda di un'azienda della rubrica. Le persone ci sono legate dal nome
+/// scritto nel loro campo "Azienda" (senza badare a maiuscole e minuscole).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Company {
+    pub id: i64,
+    pub name: String,
+    pub vat: String,
+    pub phone: String,
+    pub address: String,
+    pub website: String,
+    pub notes: String,
+}
+
+/// Scheda da salvare. Senza `id` l'azienda non ha ancora una scheda:
+/// `previous_name` è il nome che hanno oggi le sue persone.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyInput {
+    #[serde(default)]
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub previous_name: String,
+    pub name: String,
+    #[serde(default)]
+    pub vat: String,
+    #[serde(default)]
+    pub phone: String,
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub website: String,
+    #[serde(default)]
+    pub notes: String,
+}
+
+/// Scheda appena salvata e quante persone hanno preso il nome nuovo.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedCompany {
+    pub company: Company,
+    pub contacts_renamed: usize,
+}
+
+/// Contatto appena salvato e quanti colleghi dello stesso dominio hanno
+/// preso la sua azienda.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedContact {
+    pub contact: Contact,
+    pub company_shared: usize,
+}
+
+/// Domini di posta di uso comune (e di PEC): chi li usa non dice niente della
+/// sua azienda, quindi non legano fra loro i contatti.
+const PUBLIC_DOMAINS: &[&str] = &[
+    "gmail.com", "googlemail.com", "outlook.com", "outlook.it", "hotmail.com", "hotmail.it", "live.com", "live.it",
+    "msn.com", "yahoo.com", "yahoo.it", "ymail.com", "icloud.com", "me.com", "mac.com", "aol.com", "gmx.com",
+    "gmx.it", "gmx.net", "mail.com", "proton.me", "protonmail.com", "libero.it", "virgilio.it", "tiscali.it",
+    "alice.it", "tim.it", "tin.it", "email.it", "inwind.it", "iol.it", "fastwebnet.it", "vodafone.it", "teletu.it",
+    "katamail.com", "poste.it", "pec.it", "legalmail.it", "arubapec.it", "pec.aruba.it", "postacert.it",
+    "postecert.it", "pecditta.com", "sicurezzapostale.it", "cert.legalmail.it",
+];
+
+/// Dominio dell'indirizzo, se è di un'azienda e non di un servizio di posta comune.
+fn business_domain(address: &str) -> Option<&str> {
+    let domain = address.rsplit_once('@')?.1;
+    (domain.contains('.') && !PUBLIC_DOMAINS.contains(&domain)).then_some(domain)
+}
+
+/// Modello LIKE per "qualunque indirizzo di questo dominio".
+fn domain_pattern(domain: &str) -> String {
+    format!("%@{}", domain.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"))
+}
+
+/// Contatto da salvare: nuovo se `id` manca.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactInput {
+    #[serde(default)]
+    pub id: Option<i64>,
+    pub address: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub company: String,
+    #[serde(default)]
+    pub phone: String,
+    #[serde(default)]
+    pub notes: String,
+}
+
 /// Stato dei flag di un messaggio sul server.
 pub struct FlagRow {
     pub uid: u32,
@@ -122,25 +231,82 @@ CREATE TABLE IF NOT EXISTS bodies (
     PRIMARY KEY (account, folder, uid)
 );
 CREATE TABLE IF NOT EXISTS trusted_senders (address TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS contacts (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    account TEXT NOT NULL,
+    address TEXT NOT NULL,
+    name    TEXT NOT NULL DEFAULT '',
+    company TEXT NOT NULL DEFAULT '',
+    phone   TEXT NOT NULL DEFAULT '',
+    notes   TEXT NOT NULL DEFAULT '',
+    created INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (account, address)
+);
+CREATE TABLE IF NOT EXISTS companies (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    account TEXT NOT NULL,
+    name    TEXT NOT NULL COLLATE NOCASE,
+    vat     TEXT NOT NULL DEFAULT '',
+    phone   TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    website TEXT NOT NULL DEFAULT '',
+    notes   TEXT NOT NULL DEFAULT '',
+    UNIQUE (account, name)
+);
 ";
+
+const CONTACT_COLUMNS: &str = "id, address, name, company, phone, notes, created";
+
+fn contact_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Contact> {
+    let address: String = r.get(1)?;
+    Ok(Contact {
+        id: r.get(0)?,
+        business: business_domain(&address).is_some(),
+        address,
+        name: r.get(2)?,
+        company: r.get(3)?,
+        phone: r.get(4)?,
+        notes: r.get(5)?,
+        created: r.get(6)?,
+    })
+}
+
+const COMPANY_COLUMNS: &str = "id, name, vat, phone, address, website, notes";
+
+fn company_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Company> {
+    Ok(Company {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        vat: r.get(2)?,
+        phone: r.get(3)?,
+        address: r.get(4)?,
+        website: r.get(5)?,
+        notes: r.get(6)?,
+    })
+}
 
 const SUMMARY_COLUMNS: &str = "uid, subject, from_name, from_addr, to_list, date, seen, flagged, answered, \
      has_attachments, preview, size";
 
 fn summary_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Summary> {
+    summary_at(r, 0)
+}
+
+/// `SUMMARY_COLUMNS` a partire dalla colonna `at`.
+fn summary_at(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<Summary> {
     Ok(Summary {
-        uid: r.get(0)?,
-        subject: r.get(1)?,
-        from_name: r.get(2)?,
-        from_addr: r.get(3)?,
-        to: r.get(4)?,
-        date: r.get(5)?,
-        seen: r.get(6)?,
-        flagged: r.get(7)?,
-        answered: r.get(8)?,
-        has_attachments: r.get(9)?,
-        preview: r.get(10)?,
-        size: r.get(11)?,
+        uid: r.get(at)?,
+        subject: r.get(at + 1)?,
+        from_name: r.get(at + 2)?,
+        from_addr: r.get(at + 3)?,
+        to: r.get(at + 4)?,
+        date: r.get(at + 5)?,
+        seen: r.get(at + 6)?,
+        flagged: r.get(at + 7)?,
+        answered: r.get(at + 8)?,
+        has_attachments: r.get(at + 9)?,
+        preview: r.get(at + 10)?,
+        size: r.get(at + 11)?,
     })
 }
 
@@ -415,6 +581,51 @@ impl Store {
             .optional()?)
     }
 
+    /// Messaggi in archivio, i più recenti prima, come `(casella, cartella,
+    /// messaggio)`. Le parole di `query` devono esserci tutte, ognuna in
+    /// oggetto, mittente, destinatari o anteprima.
+    pub fn search(
+        &self,
+        account: Option<&str>,
+        folder: Option<&str>,
+        query: &str,
+        unread_only: bool,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<(String, String, Summary)>> {
+        use rusqlite::types::Value;
+        let mut sql = format!("SELECT account, folder, {SUMMARY_COLUMNS} FROM messages WHERE 1 = 1");
+        let mut values: Vec<Value> = Vec::new();
+        if let Some(account) = account {
+            sql.push_str(" AND account = ?");
+            values.push(Value::Text(account.to_string()));
+        }
+        if let Some(folder) = folder {
+            sql.push_str(" AND folder = ?");
+            values.push(Value::Text(folder.to_string()));
+        }
+        if unread_only {
+            sql.push_str(" AND seen = 0");
+        }
+        for word in query.split_whitespace().take(8) {
+            let pattern = format!("%{}%", word.replace(['%', '_'], ""));
+            sql.push_str(
+                " AND (subject LIKE ? OR from_name LIKE ? OR from_addr LIKE ? OR to_list LIKE ? \
+                 OR cc_list LIKE ? OR preview LIKE ?)",
+            );
+            values.extend(std::iter::repeat_n(Value::Text(pattern), 6));
+        }
+        sql.push_str(" ORDER BY date DESC, uid DESC LIMIT ? OFFSET ?");
+        values.push(Value::Integer(limit.into()));
+        values.push(Value::Integer(offset.into()));
+        let db = self.db();
+        let mut stmt = db.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(values), |r| Ok((r.get(0)?, r.get(1)?, summary_at(r, 2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
     pub fn summaries(&self, account: &str, folder: &str, uids: &[u32]) -> Result<Vec<Summary>> {
         let mut out = Vec::new();
         for &uid in uids {
@@ -491,6 +702,8 @@ impl Store {
         Ok(rows)
     }
 
+    /// Toglie la copia della posta. La rubrica resta: è scritta a mano, e se
+    /// la casella torna (stesso indirizzo, stesso id) ritrova i suoi contatti.
     pub fn drop_account(&self, account: &str) -> Result<()> {
         let db = self.db();
         for table in ["folders", "messages", "bodies"] {
@@ -535,6 +748,223 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
+
+    /// Rubrica della casella, in ordine di nome.
+    pub fn address_book(&self, account: &str) -> Result<Vec<Contact>> {
+        let db = self.db();
+        let mut stmt = db.prepare(&format!(
+            "SELECT {CONTACT_COLUMNS} FROM contacts WHERE account = ?1
+             ORDER BY CASE name WHEN '' THEN address ELSE name END COLLATE NOCASE"
+        ))?;
+        let rows = stmt.query_map([account], contact_from_row)?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// Aggiunge o modifica un contatto. Un indirizzo compare una volta sola
+    /// nella rubrica di una casella.
+    ///
+    /// Con un dominio aziendale l'azienda vale per tutto il dominio: i colleghi
+    /// senza azienda, o con quella che il contatto aveva prima, prendono la
+    /// nuova. Chi ha un'azienda diversa, scritta a mano, resta com'è.
+    pub fn save_contact(&self, account: &str, input: &ContactInput) -> Result<SavedContact> {
+        let address = input.address.trim().to_lowercase();
+        if !address.contains('@') || address.contains(char::is_whitespace) {
+            bail!("Indirizzo email non valido");
+        }
+        let id = input.id.unwrap_or(0);
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let taken: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM contacts WHERE account = ?1 AND address = ?2 AND id != ?3",
+                params![account, address, id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if taken.is_some() {
+            bail!("In rubrica c'è già un contatto con l'indirizzo {address}");
+        }
+        let (name, company, phone, notes) =
+            (input.name.trim(), input.company.trim(), input.phone.trim(), input.notes.trim());
+        let (id, old_company) = if input.id.is_some() {
+            let old: Option<String> = tx
+                .query_row(
+                    "SELECT company FROM contacts WHERE account = ?1 AND id = ?2",
+                    params![account, id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(old) = old else {
+                bail!("Il contatto non è più in rubrica");
+            };
+            tx.execute(
+                "UPDATE contacts SET address = ?3, name = ?4, company = ?5, phone = ?6, notes = ?7
+                 WHERE account = ?1 AND id = ?2",
+                params![account, id, address, name, company, phone, notes],
+            )?;
+            (id, old)
+        } else {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            tx.execute(
+                "INSERT INTO contacts (account, address, name, company, phone, notes, created)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![account, address, name, company, phone, notes, now],
+            )?;
+            (tx.last_insert_rowid(), String::new())
+        };
+        let company_shared = match business_domain(&address) {
+            Some(domain) if !company.is_empty() => tx.execute(
+                "UPDATE contacts SET company = ?1
+                 WHERE account = ?2 AND id != ?3 AND address LIKE ?4 ESCAPE '\\'
+                   AND company != ?1 AND (company = '' OR company = ?5)",
+                params![company, account, id, domain_pattern(domain), old_company],
+            )?,
+            _ => 0,
+        };
+        // Se il vecchio nome non lo usa più nessuno, l'azienda è stata
+        // rinominata: la sua scheda segue il nome nuovo.
+        if !old_company.is_empty() && !company.is_empty() && old_company != company {
+            let still_used: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM contacts WHERE account = ?1 AND company = ?2 COLLATE NOCASE)",
+                params![account, old_company],
+                |r| r.get(0),
+            )?;
+            if !still_used {
+                tx.execute(
+                    "UPDATE companies SET name = ?3 WHERE account = ?1 AND name = ?2
+                       AND NOT EXISTS (SELECT 1 FROM companies WHERE account = ?1 AND name = ?3)",
+                    params![account, old_company, company],
+                )?;
+            }
+        }
+        let contact = tx.query_row(
+            &format!("SELECT {CONTACT_COLUMNS} FROM contacts WHERE id = ?1"),
+            [id],
+            contact_from_row,
+        )?;
+        tx.commit()?;
+        Ok(SavedContact { contact, company_shared })
+    }
+
+    /// Azienda dei colleghi con lo stesso dominio aziendale, per proporla a
+    /// un contatto nuovo: la più frequente, a parità la più recente.
+    pub fn company_for(&self, account: &str, address: &str) -> Result<Option<String>> {
+        let address = address.trim().to_lowercase();
+        let Some(domain) = business_domain(&address) else {
+            return Ok(None);
+        };
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT company FROM contacts
+                 WHERE account = ?1 AND company != '' AND address LIKE ?2 ESCAPE '\\' AND address != ?3
+                 GROUP BY company ORDER BY COUNT(*) DESC, MAX(id) DESC LIMIT 1",
+                params![account, domain_pattern(domain), address],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn delete_contact(&self, account: &str, id: i64) -> Result<()> {
+        self.db().execute("DELETE FROM contacts WHERE account = ?1 AND id = ?2", params![account, id])?;
+        Ok(())
+    }
+
+    /// Schede delle aziende della casella. Un'azienda che compare solo nel
+    /// campo "Azienda" delle persone non ha ancora una scheda.
+    pub fn companies(&self, account: &str) -> Result<Vec<Company>> {
+        let db = self.db();
+        let mut stmt =
+            db.prepare(&format!("SELECT {COMPANY_COLUMNS} FROM companies WHERE account = ?1 ORDER BY name"))?;
+        let rows = stmt.query_map([account], company_from_row)?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// Salva la scheda di un'azienda. Se il nome cambia, lo prendono tutte le
+    /// persone che avevano il vecchio.
+    pub fn save_company(&self, account: &str, input: &CompanyInput) -> Result<SavedCompany> {
+        let name = input.name.trim();
+        if name.is_empty() {
+            bail!("Scrivi il nome dell'azienda");
+        }
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        // Scheda che si sta modificando, se c'è già, e nome che aveva.
+        let existing: Option<(i64, String)> = match input.id {
+            Some(id) => {
+                let row = tx
+                    .query_row(
+                        "SELECT id, name FROM companies WHERE account = ?1 AND id = ?2",
+                        params![account, id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                if row.is_none() {
+                    bail!("La scheda dell'azienda non c'è più");
+                }
+                row
+            }
+            None => tx
+                .query_row(
+                    "SELECT id, name FROM companies WHERE account = ?1 AND name = ?2",
+                    params![account, input.previous_name.trim()],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?,
+        };
+        let old_name = existing.as_ref().map_or(input.previous_name.trim().to_string(), |(_, n)| n.clone());
+        let own_id = existing.as_ref().map_or(0, |(id, _)| *id);
+        let clash: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM companies WHERE account = ?1 AND name = ?2 AND id != ?3",
+                params![account, name, own_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if clash.is_some() {
+            bail!("C'è già una scheda per l'azienda «{name}»");
+        }
+        let (vat, phone, address, website, notes) = (
+            input.vat.trim(),
+            input.phone.trim(),
+            input.address.trim(),
+            input.website.trim(),
+            input.notes.trim(),
+        );
+        let id = if own_id != 0 {
+            tx.execute(
+                "UPDATE companies SET name = ?3, vat = ?4, phone = ?5, address = ?6, website = ?7, notes = ?8
+                 WHERE account = ?1 AND id = ?2",
+                params![account, own_id, name, vat, phone, address, website, notes],
+            )?;
+            own_id
+        } else {
+            tx.execute(
+                "INSERT INTO companies (account, name, vat, phone, address, website, notes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![account, name, vat, phone, address, website, notes],
+            )?;
+            tx.last_insert_rowid()
+        };
+        let contacts_renamed = if !old_name.is_empty() && old_name != name {
+            tx.execute(
+                "UPDATE contacts SET company = ?3 WHERE account = ?1 AND company = ?2 COLLATE NOCASE",
+                params![account, old_name, name],
+            )?
+        } else {
+            0
+        };
+        let company = tx.query_row(
+            &format!("SELECT {COMPANY_COLUMNS} FROM companies WHERE id = ?1"),
+            [id],
+            company_from_row,
+        )?;
+        tx.commit()?;
+        Ok(SavedCompany { company, contacts_renamed })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -566,6 +996,137 @@ mod tests {
         let list = s.list("a", "INBOX", 10, 0).unwrap();
         assert_eq!(list.iter().map(|m| m.uid).collect::<Vec<_>>(), vec![3, 1]);
         assert!(list[1].seen);
+    }
+
+    #[test]
+    fn search_needs_every_word() {
+        let s = Store::in_memory().unwrap();
+        let mut a = row(1, 10);
+        a.subject = "Preventivo divano Rossi".into();
+        let mut b = row(2, 20);
+        b.subject = "Preventivo poltrona".into();
+        b.from_name = "Rossi Mobili".into();
+        s.insert_headers("acc", "INBOX", &[a, b]).unwrap();
+        s.insert_headers("altra", "INBOX", &[row(3, 30)]).unwrap();
+        let uids = |found: Vec<(String, String, Summary)>| found.iter().map(|(_, _, m)| m.uid).collect::<Vec<_>>();
+        assert_eq!(uids(s.search(None, None, "preventivo rossi", false, 10, 0).unwrap()), vec![2, 1]);
+        assert_eq!(uids(s.search(None, None, "divano", false, 10, 0).unwrap()), vec![1]);
+        assert_eq!(uids(s.search(Some("altra"), None, "", false, 10, 0).unwrap()), vec![3]);
+        s.set_flag("acc", "INBOX", 2, Flag::Seen, true).unwrap();
+        assert_eq!(uids(s.search(Some("acc"), Some("INBOX"), "", true, 10, 0).unwrap()), vec![1]);
+    }
+
+    #[test]
+    fn address_book_per_account() {
+        let s = Store::in_memory().unwrap();
+        let input = |address: &str, name: &str| ContactInput {
+            address: address.into(),
+            name: name.into(),
+            ..Default::default()
+        };
+        let luca = s.save_contact("a", &input(" Luca.Ferri@Ferrigomme.it ", "Luca Ferri")).unwrap().contact;
+        assert_eq!(luca.address, "luca.ferri@ferrigomme.it");
+        s.save_contact("a", &input("anna@x.it", "anna")).unwrap();
+        s.save_contact("b", &input("luca.ferri@ferrigomme.it", "Luca")).unwrap();
+        // Lo stesso indirizzo non entra due volte nella stessa rubrica.
+        assert!(s.save_contact("a", &input("LUCA.FERRI@ferrigomme.it", "Doppione")).is_err());
+        assert!(s.save_contact("a", &input("senza-chiocciola", "X")).is_err());
+        let names = |list: Vec<Contact>| list.into_iter().map(|c| c.name).collect::<Vec<_>>();
+        assert_eq!(names(s.address_book("a").unwrap()), vec!["anna", "Luca Ferri"]);
+
+        let mut edit = input("luca@ferrigomme.it", "Luca Ferri");
+        edit.id = Some(luca.id);
+        edit.company = "Ferri Gomme".into();
+        let edited = s.save_contact("a", &edit).unwrap().contact;
+        assert_eq!((edited.address.as_str(), edited.company.as_str()), ("luca@ferrigomme.it", "Ferri Gomme"));
+        // L'id di un'altra casella non si modifica da qui.
+        edit.id = Some(s.address_book("b").unwrap()[0].id);
+        edit.address = "nuovo@ferrigomme.it".into();
+        assert!(s.save_contact("a", &edit).is_err());
+        assert_eq!(s.address_book("b").unwrap()[0].address, "luca.ferri@ferrigomme.it");
+
+        s.delete_contact("a", luca.id).unwrap();
+        assert_eq!(names(s.address_book("a").unwrap()), vec!["anna"]);
+        s.drop_account("b").unwrap();
+        assert_eq!(s.address_book("b").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn company_follows_business_domain() {
+        let s = Store::in_memory().unwrap();
+        let save = |id: Option<i64>, address: &str, company: &str| {
+            let input = ContactInput { id, address: address.into(), company: company.into(), ..Default::default() };
+            s.save_contact("a", &input).unwrap()
+        };
+        let company = |address: &str| {
+            s.address_book("a").unwrap().into_iter().find(|c| c.address == address).unwrap().company
+        };
+        let anna = save(None, "anna@ferrigomme.it", "Ferri Gomme");
+        // Al nuovo collega si propone l'azienda del dominio.
+        assert_eq!(s.company_for("a", "Paolo@FerriGomme.it").unwrap().as_deref(), Some("Ferri Gomme"));
+        assert_eq!(s.company_for("b", "paolo@ferrigomme.it").unwrap(), None);
+        save(None, "paolo@ferrigomme.it", "");
+        save(None, "luca@ferrigomme.it", "");
+        save(None, "a@altro-ferrigomme.it", "");
+
+        // Rinominando l'azienda di Anna la prendono i colleghi senza azienda,
+        // non chi ha un dominio solo simile.
+        let renamed = save(Some(anna.contact.id), "anna@ferrigomme.it", "Ferri Gomme srl");
+        assert_eq!(renamed.company_shared, 2);
+        assert_eq!(company("paolo@ferrigomme.it"), "Ferri Gomme srl");
+        assert_eq!(company("a@altro-ferrigomme.it"), "");
+        // Chi ha un'azienda diversa, scritta a mano, non la passa a nessuno e non la perde.
+        assert_eq!(save(None, "marta@ferrigomme.it", "Consulente esterna").company_shared, 0);
+        // Un secondo rinomina da Paolo segue il vecchio nome anche su Anna e Luca.
+        let paolo = s.address_book("a").unwrap().into_iter().find(|c| c.address.starts_with("paolo")).unwrap();
+        assert_eq!(save(Some(paolo.id), "paolo@ferrigomme.it", "Ferri Gomme SpA").company_shared, 2);
+        assert_eq!(company("anna@ferrigomme.it"), "Ferri Gomme SpA");
+        assert_eq!(company("marta@ferrigomme.it"), "Consulente esterna");
+
+        // I domini di uso comune non legano nessuno.
+        save(None, "sara@gmail.com", "Studio Galli");
+        let giulia = save(None, "giulia@gmail.com", "");
+        assert_eq!(giulia.contact.company, "");
+        assert_eq!(s.company_for("a", "nuovo@gmail.com").unwrap(), None);
+        assert_eq!(save(Some(giulia.contact.id), "giulia@gmail.com", "Bar Giulia").company_shared, 0);
+        assert_eq!(company("sara@gmail.com"), "Studio Galli");
+    }
+
+    #[test]
+    fn company_cards_follow_their_people() {
+        let s = Store::in_memory().unwrap();
+        let person = |address: &str, company: &str| {
+            let input = ContactInput { address: address.into(), company: company.into(), ..Default::default() };
+            s.save_contact("a", &input).unwrap().contact
+        };
+        let anna = person("anna@ferrigomme.it", "Ferri Gomme");
+        let sara = person("sara@gmail.com", "ferri gomme");
+        assert!(anna.business && !sara.business);
+        let card = |id: Option<i64>, previous: &str, name: &str| CompanyInput {
+            id,
+            previous_name: previous.into(),
+            name: name.into(),
+            vat: "IT01234567890".into(),
+            ..Default::default()
+        };
+        // Prima scheda, creata dal nome che hanno le persone: rinominando la
+        // prendono tutte, anche chi l'aveva scritto in minuscolo.
+        let saved = s.save_company("a", &card(None, "Ferri Gomme", "Ferri Gomme srl")).unwrap();
+        assert_eq!(saved.contacts_renamed, 2);
+        let companies = |list: Vec<Contact>| list.into_iter().map(|c| c.company).collect::<Vec<_>>();
+        assert_eq!(companies(s.address_book("a").unwrap()), vec!["Ferri Gomme srl", "Ferri Gomme srl"]);
+        assert!(s.save_company("a", &card(None, "", "  ")).is_err());
+        // Un'altra scheda non può prendere lo stesso nome.
+        let other = s.save_company("a", &card(None, "", "Tappezzeria Ronchi")).unwrap().company;
+        assert!(s.save_company("a", &card(Some(other.id), "", "FERRI GOMME SRL")).is_err());
+        // Rinominata dalla scheda di una persona, la scheda segue il nome nuovo.
+        let edit = ContactInput { id: Some(anna.id), address: anna.address, company: "Ferri Gomme SpA".into(), ..Default::default() };
+        assert_eq!(s.save_contact("a", &edit).unwrap().company_shared, 0);
+        let edit = ContactInput { id: Some(sara.id), address: sara.address, company: "Ferri Gomme SpA".into(), ..Default::default() };
+        s.save_contact("a", &edit).unwrap();
+        let names = s.companies("a").unwrap().into_iter().map(|c| c.name).collect::<Vec<_>>();
+        assert_eq!(names, vec!["Ferri Gomme SpA", "Tappezzeria Ronchi"]);
+        assert_eq!(s.companies("a").unwrap()[0].vat, "IT01234567890");
     }
 
     #[test]

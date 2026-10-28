@@ -1,7 +1,7 @@
 //! Comandi chiamati dall'interfaccia. Gli errori arrivano all'interfaccia
 //! come testo già pronto da mostrare.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
@@ -12,8 +12,11 @@ use tauri_plugin_opener::OpenerExt;
 use crate::AppState;
 use crate::accounts::{self, Account};
 use crate::render::{self, Attachment, Rendered, format_person};
-use crate::store::{Flag, Folder, Summary};
-use crate::{addons, craft, imap, interno, smtp, sync, update};
+use crate::store::{
+    Company, CompanyInput, Contact, ContactInput, Flag, Folder, SavedCompany, SavedContact, Summary,
+};
+use crate::signatures::{self, Signature};
+use crate::{addons, claude, craft, imap, interno, mailto, smtp, sync, update};
 
 type Res<T> = std::result::Result<T, String>;
 type St<'a> = State<'a, Arc<AppState>>;
@@ -74,6 +77,7 @@ async fn add_account(state: &AppState, input: NewAccount) -> Result<Account> {
     if state.accounts.contains(&id) {
         bail!("La casella {email} c'è già");
     }
+    let signature = signatures::for_new_account(&state.signatures, &email);
     let acc = Account {
         id,
         email: email.clone(),
@@ -82,7 +86,9 @@ async fn add_account(state: &AppState, input: NewAccount) -> Result<Account> {
         imap_port: input.imap_port,
         smtp_host: input.smtp_host.trim().to_string(),
         smtp_port: input.smtp_port,
-        signature: accounts::outlook_signature(&email).unwrap_or_default(),
+        signature_new: signature.clone(),
+        signature_reply: signature,
+        signature: String::new(),
         accept_invalid_certs: input.accept_invalid_certs,
     };
     // L'accesso al server verifica indirizzo e password prima di salvare qualcosa.
@@ -110,15 +116,87 @@ pub async fn account_remove(state: St<'_>, account_id: String) -> Res<()> {
     run.await.map_err(fail)
 }
 
+/// Firma dei messaggi nuovi e di risposte e inoltri della casella.
 #[tauri::command]
-pub fn account_set_signature(state: St<'_>, account_id: String, signature: String) -> Res<Account> {
+pub fn account_set_signatures(
+    state: St<'_>,
+    account_id: String,
+    signature_new: Option<String>,
+    signature_reply: Option<String>,
+) -> Res<Account> {
     let run = || -> Result<Account> {
         let mut acc = state.accounts.get(&account_id)?;
-        acc.signature = signature.replace("\r\n", "\n").trim_end().to_string();
+        for id in signature_new.iter().chain(signature_reply.iter()) {
+            if state.signatures.get(id).is_none() {
+                bail!("La firma scelta non c'è più: è stata eliminata");
+            }
+        }
+        acc.signature_new = signature_new;
+        acc.signature_reply = signature_reply;
         state.accounts.upsert(acc.clone())?;
         Ok(acc)
     };
     run().map_err(fail)
+}
+
+// ---- firme ----
+
+#[tauri::command]
+pub fn signatures_list(state: St<'_>) -> Vec<Signature> {
+    state.signatures.all()
+}
+
+/// Crea (senza `id`) o aggiorna una firma; restituisce l'HTML ripulito.
+#[tauri::command]
+pub fn signature_save(state: St<'_>, id: Option<String>, name: String, html: String) -> Res<Signature> {
+    state.signatures.save(id.as_deref(), &name, &html).map_err(fail)
+}
+
+/// Toglie la firma dall'elenco e dalle caselle che la usavano.
+#[tauri::command]
+pub fn signature_delete(state: St<'_>, id: String) -> Res<Vec<Account>> {
+    let run = || -> Result<Vec<Account>> {
+        state.signatures.remove(&id)?;
+        for mut acc in state.accounts.all() {
+            let mut changed = false;
+            for slot in [&mut acc.signature_new, &mut acc.signature_reply] {
+                if slot.as_deref() == Some(id.as_str()) {
+                    *slot = None;
+                    changed = true;
+                }
+            }
+            if changed {
+                state.accounts.upsert(acc)?;
+            }
+        }
+        Ok(state.accounts.all())
+    };
+    run().map_err(fail)
+}
+
+/// HTML scritto a mano nell'editor, ripulito prima di mostrarlo.
+#[tauri::command]
+pub fn signature_clean(html: String) -> String {
+    signatures::clean(&html)
+}
+
+/// Immagine scelta dal PC, pronta da inserire nella firma.
+#[tauri::command]
+pub fn signature_image(path: String) -> Res<String> {
+    signatures::image(Path::new(&path)).map_err(fail)
+}
+
+/// Nomi delle firme di Outlook di questo PC che non sono ancora nell'elenco.
+#[tauri::command]
+pub fn signatures_outlook(state: St<'_>) -> Vec<String> {
+    let have: Vec<String> = state.signatures.all().into_iter().map(|s| s.name).collect();
+    signatures::outlook().into_iter().map(|o| o.name).filter(|n| !have.contains(n)).collect()
+}
+
+#[tauri::command]
+pub fn signatures_import_outlook(state: St<'_>, names: Vec<String>) -> Res<Vec<Signature>> {
+    let picked = signatures::outlook().into_iter().filter(|o| names.contains(&o.name)).map(|o| (o.name, o.html));
+    state.signatures.add(picked.collect()).map_err(fail)
 }
 
 // ---- cartelle e sincronizzazione ----
@@ -214,7 +292,7 @@ pub async fn messages_load_older(state: St<'_>, account_id: String, folder: Stri
     run.await.map_err(fail)
 }
 
-async fn load_raw(state: &AppState, acc: &Account, folder: &str, uid: u32) -> Result<Vec<u8>> {
+pub(crate) async fn load_raw(state: &AppState, acc: &Account, folder: &str, uid: u32) -> Result<Vec<u8>> {
     if let Some(raw) = state.store.body(&acc.id, folder, uid)? {
         return Ok(raw);
     }
@@ -293,16 +371,21 @@ pub async fn message_set_flagged(state: St<'_>, account_id: String, folder: Stri
 pub async fn message_delete(state: St<'_>, account_id: String, folder: String, uid: u32) -> Res<()> {
     let run = async {
         let acc = state.accounts.get(&account_id)?;
-        let trash = state.store.folder_with_role(&acc.id, "trash")?;
-        let unseen = state.store.summary(&acc.id, &folder, uid)?.is_some_and(|s| !s.seen);
-        with_imap!(state, acc, |c| imap::delete(c, &folder, uid, trash.as_deref()))?;
-        state.store.remove_message(&acc.id, &folder, uid)?;
-        if unseen {
-            state.store.adjust_unseen(&acc.id, &folder, -1)?;
-        }
-        Ok(())
+        delete_message(&state, &acc, &folder, uid).await
     };
     run.await.map_err(fail)
+}
+
+/// Nel cestino; dal cestino (o se non c'è) per sempre.
+pub(crate) async fn delete_message(state: &AppState, acc: &Account, folder: &str, uid: u32) -> Result<()> {
+    let trash = state.store.folder_with_role(&acc.id, "trash")?;
+    let unseen = state.store.summary(&acc.id, folder, uid)?.is_some_and(|s| !s.seen);
+    with_imap!(state, acc, |c| imap::delete(c, folder, uid, trash.as_deref()))?;
+    state.store.remove_message(&acc.id, folder, uid)?;
+    if unseen {
+        state.store.adjust_unseen(&acc.id, folder, -1)?;
+    }
+    Ok(())
 }
 
 // ---- allegati ----
@@ -530,6 +613,39 @@ pub fn contacts_suggest(state: St<'_>, query: String) -> Res<Vec<String>> {
         .map_err(fail)
 }
 
+// ---- rubrica ----
+
+#[tauri::command]
+pub fn address_book_list(state: St<'_>, account_id: String) -> Res<Vec<Contact>> {
+    state.store.address_book(&account_id).map_err(fail)
+}
+
+#[tauri::command]
+pub fn address_book_save(state: St<'_>, account_id: String, contact: ContactInput) -> Res<SavedContact> {
+    state.store.save_contact(&account_id, &contact).map_err(fail)
+}
+
+/// Azienda da proporre a un contatto nuovo, dai colleghi con lo stesso dominio.
+#[tauri::command]
+pub fn address_book_company(state: St<'_>, account_id: String, address: String) -> Res<Option<String>> {
+    state.store.company_for(&account_id, &address).map_err(fail)
+}
+
+#[tauri::command]
+pub fn address_book_delete(state: St<'_>, account_id: String, id: i64) -> Res<()> {
+    state.store.delete_contact(&account_id, id).map_err(fail)
+}
+
+#[tauri::command]
+pub fn address_book_companies(state: St<'_>, account_id: String) -> Res<Vec<Company>> {
+    state.store.companies(&account_id).map_err(fail)
+}
+
+#[tauri::command]
+pub fn address_book_company_save(state: St<'_>, account_id: String, company: CompanyInput) -> Res<SavedCompany> {
+    state.store.save_company(&account_id, &company).map_err(fail)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileInfo {
@@ -555,16 +671,21 @@ pub fn files_info(paths: Vec<String>) -> Res<Vec<FileInfo>> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Compose {
-    account_id: String,
-    to: String,
-    cc: String,
-    subject: String,
-    body: String,
-    in_reply_to: Option<String>,
-    references: Option<String>,
-    reply: Option<MsgRef>,
-    forward: Option<MsgRef>,
-    forward_attachments: Vec<Attachment>,
+    pub(crate) account_id: String,
+    pub(crate) to: String,
+    pub(crate) cc: String,
+    pub(crate) subject: String,
+    /// Testo nuovo: in una risposta parte vuoto.
+    pub(crate) body: String,
+    /// Citazione o messaggio inoltrato: va sotto la firma.
+    pub(crate) quote: String,
+    /// Firma proposta (quella di risposte e inoltri della casella).
+    pub(crate) signature_id: Option<String>,
+    pub(crate) in_reply_to: Option<String>,
+    pub(crate) references: Option<String>,
+    pub(crate) reply: Option<MsgRef>,
+    pub(crate) forward: Option<MsgRef>,
+    pub(crate) forward_attachments: Vec<Attachment>,
 }
 
 #[tauri::command]
@@ -577,10 +698,9 @@ pub async fn compose_from(state: St<'_>, account_id: String, folder: String, uid
     run.await.map_err(fail)
 }
 
-fn compose_reply(acc: &Account, raw: &[u8], source: MsgRef, mode: &str) -> Result<Compose> {
+pub(crate) fn compose_reply(acc: &Account, raw: &[u8], source: MsgRef, mode: &str) -> Result<Compose> {
     let o = render::original(raw)?;
     let is_me = |p: &(String, String)| p.1.eq_ignore_ascii_case(&acc.email);
-    let signature = if acc.signature.trim().is_empty() { String::new() } else { format!("{}\n\n", acc.signature.trim()) };
     if mode == "forward" {
         let mut header = format!(
             "---------- Messaggio inoltrato ----------\nDa: {}\nData: {}\nOggetto: {}\nA: {}\n",
@@ -597,7 +717,9 @@ fn compose_reply(acc: &Account, raw: &[u8], source: MsgRef, mode: &str) -> Resul
             to: String::new(),
             cc: String::new(),
             subject: with_prefix("I: ", &o.subject, &["i:", "fw:", "fwd:", "inoltro:"]),
-            body: format!("\n\n{signature}{header}\n{}", o.text.trim_end()),
+            body: String::new(),
+            quote: format!("{header}\n{}", o.text.trim_end()),
+            signature_id: acc.signature_reply.clone(),
             in_reply_to: None,
             references: None,
             reply: None,
@@ -640,7 +762,9 @@ fn compose_reply(acc: &Account, raw: &[u8], source: MsgRef, mode: &str) -> Resul
         to: to.iter().map(format_person).collect::<Vec<_>>().join(", "),
         cc: cc.iter().map(format_person).collect::<Vec<_>>().join(", "),
         subject: with_prefix("R: ", &o.subject, &["r:", "re:", "ris:"]),
-        body: format!("\n\n{signature}{intro}\n{quoted}"),
+        body: String::new(),
+        quote: format!("{intro}\n{quoted}"),
+        signature_id: acc.signature_reply.clone(),
         in_reply_to: o.message_id.as_ref().map(|id| format!("<{id}>")),
         references: (!references.is_empty()).then(|| references.join(" ")),
         reply: Some(source),
@@ -657,24 +781,30 @@ fn with_prefix(prefix: &str, subject: &str, known: &[&str]) -> String {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Outgoing {
-    account_id: String,
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String,
-    attachments: Vec<String>,
-    in_reply_to: Option<String>,
-    references: Option<String>,
-    reply: Option<MsgRef>,
-    forward: Option<MsgRef>,
+    pub(crate) account_id: String,
+    pub(crate) to: String,
+    pub(crate) cc: String,
+    pub(crate) bcc: String,
+    pub(crate) subject: String,
+    pub(crate) body: String,
+    /// Citazione o messaggio inoltrato, sotto la firma.
+    #[serde(default)]
+    pub(crate) quote: String,
+    /// Firma dell'elenco da mettere sotto il testo, nessuna se `None`.
+    #[serde(default)]
+    pub(crate) signature_id: Option<String>,
+    pub(crate) attachments: Vec<String>,
+    pub(crate) in_reply_to: Option<String>,
+    pub(crate) references: Option<String>,
+    pub(crate) reply: Option<MsgRef>,
+    pub(crate) forward: Option<MsgRef>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendReport {
     saved_to_sent: bool,
-    warning: Option<String>,
+    pub(crate) warning: Option<String>,
 }
 
 #[tauri::command]
@@ -682,7 +812,7 @@ pub async fn message_send(app: AppHandle, state: St<'_>, input: Outgoing) -> Res
     send_message(&app, &state, input).await.map_err(fail)
 }
 
-async fn send_message(app: &AppHandle, state: &AppState, input: Outgoing) -> Result<SendReport> {
+pub(crate) async fn send_message(app: &AppHandle, state: &AppState, input: Outgoing) -> Result<SendReport> {
     let acc = state.accounts.get(&input.account_id)?;
     let mut files = Vec::new();
     let mut total: u64 = 0;
@@ -706,6 +836,10 @@ async fn send_message(app: &AppHandle, state: &AppState, input: Outgoing) -> Res
     if total > MAX_ATTACHMENTS {
         bail!("Gli allegati sono troppo grandi per il server di posta (massimo circa 360 MB in tutto)");
     }
+    let signature = match &input.signature_id {
+        Some(id) => Some(state.signatures.get(id).context("La firma scelta non c'è più: scegline un'altra")?),
+        None => None,
+    };
     let message = smtp::build(
         &acc,
         smtp::Draft {
@@ -714,6 +848,8 @@ async fn send_message(app: &AppHandle, state: &AppState, input: Outgoing) -> Res
             bcc: &input.bcc,
             subject: &input.subject,
             body: &input.body,
+            quote: &input.quote,
+            signature: signature.as_ref().map(|s| s.html.as_str()),
             files,
             in_reply_to: input.in_reply_to.clone(),
             references: input.references.clone(),
@@ -1003,6 +1139,29 @@ pub fn update_install(state: St<'_>) -> Res<()> {
     state.updates.install().map_err(fail)
 }
 
+// ---- link email ----
+
+/// Link email con cui è stato aperto Postamon, una volta sola.
+#[tauri::command]
+pub fn mailto_take(state: St<'_>) -> Option<mailto::Mailto> {
+    state.mailto.lock().unwrap_or_else(|p| p.into_inner()).take()
+}
+
+/// Link email cliccato dentro un messaggio.
+#[tauri::command]
+pub fn mailto_parse(link: String) -> Option<mailto::Mailto> {
+    mailto::parse(&link)
+}
+
+/// Apre la pagina di Windows dove si sceglie Postamon per i link email.
+#[tauri::command]
+pub fn mailto_settings(app: AppHandle) -> Res<()> {
+    let name = app.package_info().name.clone();
+    app.opener()
+        .open_url(mailto::settings_url(&name), None::<&str>)
+        .map_err(|e| fail(anyhow::anyhow!("Impostazioni di Windows non disponibili: {e}")))
+}
+
 // ---- add-on ----
 //
 // Le richieste degli add-on arrivano dall'interfaccia, che conosce il riquadro
@@ -1115,6 +1274,150 @@ pub fn addon_storage(
     run().map_err(fail)
 }
 
+// ---- Claude ----
+//
+// Postamon non fa accedere a Claude: l'accesso lo fanno Claude Code e Claude
+// Desktop. Qui si accende il collegamento, si aggiunge Postamon ai loro
+// server MCP e si parla con il Claude Code del PC dal pannello.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeStatus {
+    enabled: bool,
+    /// Claude Code sul PC, se c'è.
+    cli: Option<claude::code::CliStatus>,
+    desktop_installed: bool,
+    desktop_linked: bool,
+    code_linked: bool,
+    /// Modello del pannello.
+    model: String,
+}
+
+#[tauri::command]
+pub async fn claude_status(state: St<'_>) -> Res<ClaudeStatus> {
+    let settings = state.claude.settings();
+    Ok(ClaudeStatus {
+        model: settings.model().to_string(),
+        enabled: settings.enabled,
+        cli: claude::code::status().await,
+        desktop_installed: claude::code::desktop_config().is_some(),
+        desktop_linked: claude::code::desktop_linked(),
+        code_linked: settings.code_linked,
+    })
+}
+
+#[tauri::command]
+pub fn claude_set_enabled(state: St<'_>, enabled: bool) -> Res<()> {
+    if !enabled {
+        state.claude.chat.reset();
+    }
+    state.claude.update_settings(|s| s.enabled = enabled).map(|_| ()).map_err(fail)
+}
+
+/// Modello del pannello. Claude Code ripartirà con quello al prossimo
+/// messaggio, riprendendo la stessa conversazione.
+#[tauri::command]
+pub fn claude_set_model(state: St<'_>, model: String) -> Res<()> {
+    if !claude::MODELS.contains(&model.as_str()) {
+        return Err(format!("Modello sconosciuto: {model}"));
+    }
+    state.claude.update_settings(|s| s.model = model).map_err(fail)?;
+    state.claude.chat.stop();
+    Ok(())
+}
+
+/// Apre la finestra di accesso di Claude Code.
+#[tauri::command]
+pub fn claude_login() -> Res<()> {
+    claude::code::login().map_err(fail)
+}
+
+fn postamon_exe() -> Result<PathBuf> {
+    std::env::current_exe().context("Non trovo il programma di Postamon")
+}
+
+#[tauri::command]
+pub fn claude_link_desktop(state: St<'_>, on: bool) -> Res<()> {
+    let run = || claude::code::link_desktop(on, &postamon_exe()?, state.claude.data_dir());
+    run().map_err(fail)
+}
+
+#[tauri::command]
+pub async fn claude_link_code(state: St<'_>, on: bool) -> Res<()> {
+    let run = async {
+        claude::code::link_code(on, &postamon_exe()?, state.claude.data_dir()).await?;
+        state.claude.update_settings(|s| s.code_linked = on)?;
+        Ok(())
+    };
+    run.await.map_err(fail)
+}
+
+/// Cosa sta guardando l'utente, per quando Claude parla di «questo messaggio».
+#[tauri::command]
+pub fn claude_context(state: St<'_>, context: claude::Context) {
+    state.claude.set_context(context);
+}
+
+#[tauri::command]
+pub fn claude_requests(state: St<'_>) -> Vec<claude::Request> {
+    state.claude.confirms.list()
+}
+
+/// Risposta a una richiesta di Claude; restituisce com'è andata.
+#[tauri::command]
+pub async fn claude_answer(state: St<'_>, id: u64, answer: claude::Answer) -> Res<String> {
+    state.claude.confirms.answer(id, answer).await.map_err(fail)
+}
+
+/// Messaggio dal pannello. Restituisce il numero della conversazione negli
+/// eventi `claude-chat` che seguono.
+#[tauri::command]
+pub fn claude_chat_send(app: AppHandle, state: St<'_>, text: String) -> Res<u64> {
+    let run = || -> Result<u64> {
+        let settings = state.claude.settings();
+        if !settings.enabled {
+            bail!("Prima accendi il collegamento con Claude");
+        }
+        let setup = claude::code::Setup {
+            postamon: postamon_exe()?,
+            data_dir: state.claude.data_dir().to_path_buf(),
+            dir: state.claude.dir().to_path_buf(),
+            model: settings.model().to_string(),
+        };
+        state.claude.chat.send(&app, &setup, &with_context(&state, text.trim()))
+    };
+    run().map_err(fail)
+}
+
+/// Il messaggio per Claude con davanti cosa ha aperto l'utente.
+fn with_context(state: &AppState, text: &str) -> String {
+    let ctx = state.claude.context();
+    let Some(acc) = ctx.account_id.as_deref().and_then(|id| state.accounts.get(id).ok()) else {
+        return text.to_string();
+    };
+    let mut note = format!("[Postamon] Casella aperta: {}.", acc.email);
+    if let (Some(folder), Some(uid)) = (&ctx.folder, ctx.uid)
+        && let Ok(Some(s)) = state.store.summary(&acc.id, folder, uid)
+    {
+        note.push_str(&format!(
+            " Messaggio aperto: cartella «{folder}», uid {uid}, oggetto «{}», da {}.",
+            s.subject,
+            format_person(&(s.from_name, s.from_addr))
+        ));
+    }
+    format!("{note}\n\n{text}")
+}
+
+#[tauri::command]
+pub fn claude_chat_stop(state: St<'_>) {
+    state.claude.chat.stop();
+}
+
+#[tauri::command]
+pub fn claude_chat_reset(state: St<'_>) {
+    state.claude.chat.reset();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1128,7 +1431,9 @@ mod tests {
             imap_port: 993,
             smtp_host: String::new(),
             smtp_port: 465,
-            signature: "Marco\nDimensione Salotto".into(),
+            signature_new: Some("nuovi".into()),
+            signature_reply: Some("risposte".into()),
+            signature: String::new(),
             accept_invalid_certs: false,
         }
     }
@@ -1146,7 +1451,10 @@ References: <m1@x.it>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nVa bene.
         assert_eq!(c.subject, "Re: Preventivo");
         assert_eq!(c.in_reply_to.as_deref(), Some("<m2@x.it>"));
         assert_eq!(c.references.as_deref(), Some("<m1@x.it> <m2@x.it>"));
-        assert!(c.body.starts_with("\n\nMarco\nDimensione Salotto\n\nIl 21 ottobre 2026, 10:42, Anna <anna@x.it> ha scritto:\n> Va bene.\n> Grazie"));
+        // testo nuovo vuoto, la firma di risposte e inoltri, la citazione a parte
+        assert_eq!(c.body, "");
+        assert_eq!(c.signature_id.as_deref(), Some("risposte"));
+        assert_eq!(c.quote, "Il 21 ottobre 2026, 10:42, Anna <anna@x.it> ha scritto:\n> Va bene.\n> Grazie");
     }
 
     #[test]
@@ -1155,7 +1463,8 @@ References: <m1@x.it>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nVa bene.
             .unwrap();
         assert_eq!(c.subject, "I: Re: Preventivo");
         assert!(c.to.is_empty());
-        assert!(c.body.contains("---------- Messaggio inoltrato ----------\nDa: Anna <anna@x.it>"));
+        assert!(c.quote.starts_with("---------- Messaggio inoltrato ----------\nDa: Anna <anna@x.it>"));
+        assert_eq!(c.signature_id.as_deref(), Some("risposte"));
     }
 
     #[test]

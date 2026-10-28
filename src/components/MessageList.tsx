@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Flag, Inbox, LoaderCircle, Paperclip, Reply, Search } from "lucide-react";
-import type { MessagePage, Summary } from "../api";
+import type { Contact, MessagePage, Summary } from "../api";
 import { listDate, senderLabel } from "../format";
+import { contactLabel } from "../book";
 
 interface Props {
   title: string;
@@ -9,6 +10,8 @@ interface Props {
   page: MessagePage | null;
   /** Nella posta inviata si mostra il destinatario invece del mittente. */
   showRecipient: boolean;
+  /** Il mittente nella rubrica della casella, se c'è. */
+  contactOf: (address: string) => Contact | undefined;
   selectedUid: number | null;
   loadingOlder: boolean;
   onSelect: (uid: number) => void;
@@ -21,6 +24,7 @@ export function MessageList({
   subtitle,
   page,
   showRecipient,
+  contactOf,
   selectedUid,
   loadingOlder,
   onSelect,
@@ -37,9 +41,11 @@ export function MessageList({
     const q = query.trim().toLowerCase();
     if (!q) return all;
     return all.filter((m) =>
-      [m.subject, m.fromName, m.fromAddr, m.to, m.preview].some((v) => v.toLowerCase().includes(q)),
+      [m.subject, m.fromName, m.fromAddr, m.to, m.preview, contactOf(m.fromAddr)?.name ?? ""].some((v) =>
+        v.toLowerCase().includes(q),
+      ),
     );
-  }, [page, query]);
+  }, [page, query, contactOf]);
 
   // Il messaggio selezionato resta visibile quando si scorre con la tastiera.
   useEffect(() => {
@@ -94,6 +100,7 @@ export function MessageList({
             key={m.uid}
             message={m}
             showRecipient={showRecipient}
+            contact={showRecipient ? undefined : contactOf(m.fromAddr)}
             selected={m.uid === selectedUid}
             onClick={() => onSelect(m.uid)}
           />
@@ -114,17 +121,24 @@ export function MessageList({
 function Row({
   message: m,
   showRecipient,
+  contact,
   selected,
   onClick,
 }: {
   message: Summary;
   showRecipient: boolean;
+  contact: Contact | undefined;
   selected: boolean;
   onClick: () => void;
 }) {
-  const who = showRecipient ? `A: ${m.to || "(nessuno)"}` : senderLabel(m.fromName, m.fromAddr);
+  const who = showRecipient
+    ? `A: ${m.to || "(nessuno)"}`
+    : contact
+      ? contactLabel(contact)
+      : senderLabel(m.fromName, m.fromAddr);
   return (
     <div className={`row ${m.seen ? "" : "unread"} ${selected ? "selected" : ""}`} onClick={onClick}>
+      {contact && <span className="contact-mark" role="img" aria-label="In rubrica" title="In rubrica" />}
       <span className="dot" />
       <span className="row-from" title={m.fromAddr}>
         {who}

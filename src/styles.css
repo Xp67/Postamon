@@ -16,6 +16,8 @@
   --danger: #b3261e;
   --danger-soft: #fbeceb;
   --ok: #2e7d4f;
+  /* Segno dei mittenti in rubrica: diverso dal petrolio di selezione e "da leggere". */
+  --contact: #2e7d4f;
   --warn: #7a5100;
   --warn-soft: #fff4da;
   --radius: 10px;
@@ -862,15 +864,97 @@ svg {
   cursor: pointer;
 }
 
-.compose-body {
+/* Testo, firma e citazione scorrono insieme, come nel messaggio che arriva. */
+.compose-scroll {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.compose-body {
+  flex: 1 0 auto;
   min-height: 160px;
   padding: 14px 18px;
+  overflow: hidden;
   border: 0;
   outline: 0;
   resize: none;
   font-size: 14px;
   line-height: 1.55;
+}
+
+.compose-signature {
+  padding: 4px 18px 14px;
+}
+
+.compose-signature-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--ink-3);
+}
+
+.compose-signature-head svg {
+  width: 16px;
+  height: 16px;
+}
+
+.compose-signature-head select {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--sheet);
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.compose-quote {
+  margin: 0 18px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+
+.compose-quote-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.compose-quote-head svg {
+  width: 16px;
+  height: 16px;
+}
+
+.compose-quote-title {
+  font-weight: 600;
+}
+
+.compose-quote-peek {
+  overflow: hidden;
+  color: var(--ink-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compose-quote-body {
+  display: block;
+  width: 100%;
+  min-height: 80px;
+  padding: 4px 12px 12px;
+  color: var(--ink-2);
 }
 
 .compose-files {
@@ -2151,4 +2235,1300 @@ textarea.input {
   display: flex;
   gap: 8px;
   margin-top: 18px;
+}
+
+/* ---- Claude ---- */
+
+.claude-toggle.active {
+  border-color: #b9d8e3;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Con il pannello aperto lo spazio si divide in proporzione, il messaggio per primo. */
+.workspace.with-claude {
+  grid-template-columns: 240px minmax(250px, 0.8fr) minmax(320px, 1.4fr) minmax(300px, 1fr);
+}
+
+.claude-panel[hidden] {
+  display: none;
+}
+
+.claude-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.claude-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.claude-head .spacer {
+  flex: 1;
+}
+
+.claude-model {
+  flex: none;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--sheet);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.claude-model:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+
+.claude-model:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.claude-head .icon-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.claude-mark {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.claude-who {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.claude-center {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  color: var(--ink-3);
+}
+
+.claude-setup {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 24px 22px;
+  overflow-y: auto;
+}
+
+.claude-setup-icon {
+  width: 30px;
+  height: 30px;
+  margin-bottom: 6px;
+  color: var(--accent);
+}
+
+.claude-setup h3 {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 17px;
+}
+
+.claude-setup p {
+  margin: 4px 0 12px;
+  color: var(--ink-2);
+}
+
+.claude-setup .consent-list {
+  margin: 12px 0 8px;
+}
+
+.claude-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.claude-wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.claude-wait svg {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.claude-messages {
+  padding: 14px 14px 6px;
+}
+
+.claude-intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 28px 4px;
+  color: var(--ink-2);
+  text-align: center;
+}
+
+.claude-intro > svg {
+  width: 26px;
+  height: 26px;
+  color: var(--accent);
+}
+
+.claude-intro p {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.claude-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.claude-suggestions .btn {
+  justify-content: flex-start;
+  height: auto;
+  min-height: 32px;
+  padding: 6px 12px;
+  text-align: left;
+  white-space: normal;
+}
+
+.claude-answer {
+  margin: 4px 0 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.claude-tool {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 6px 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.claude-tool svg {
+  width: 14px;
+  height: 14px;
+}
+
+.claude-tool.run svg {
+  color: var(--accent);
+}
+
+.claude-tool.ok svg {
+  color: var(--ok);
+}
+
+.claude-tool.error svg {
+  color: var(--danger);
+}
+
+.claude-stopped {
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-style: italic;
+}
+
+.claude-error {
+  display: flex;
+  gap: 7px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.claude-error svg {
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+}
+
+.claude-context {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.claude-context svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+.claude-context span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* testo delle risposte */
+
+.md p {
+  margin: 0 0 8px;
+}
+
+.md ul,
+.md ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.md li {
+  margin: 2px 0;
+}
+
+.md .md-title {
+  margin-top: 10px;
+  font-weight: 700;
+}
+
+.md code,
+.md pre {
+  border-radius: 6px;
+  background: var(--line-soft);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12.5px;
+}
+
+.md code {
+  padding: 1px 5px;
+}
+
+.md pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+}
+
+.md-table {
+  margin: 0 0 8px;
+  overflow-x: auto;
+}
+
+.md table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.md th,
+.md td {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md th {
+  background: var(--line-soft);
+}
+
+/* impostazioni */
+
+.claude-settings {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.claude-settings > section {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.claude-settings h4 {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 22px 0 8px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.claude-settings > section.claude-row {
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.claude-row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.claude-row-main b {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.claude-row-main span {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+/* conferme: sopra a tutto, anche alla finestra di scrittura */
+
+.overlay.claude-overlay {
+  z-index: 40;
+}
+
+.dialog.claude-request {
+  width: min(620px, 100%);
+}
+
+.claude-request .tag {
+  flex: none;
+}
+
+.claude-request-fields {
+  border-bottom: 1px solid var(--line);
+}
+
+.claude-request-body {
+  max-height: 340px;
+  padding: 14px 18px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.claude-request-lead {
+  margin: 0 0 12px;
+  color: var(--ink-2);
+}
+
+.claude-request-warn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.claude-request-warn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.claude-request-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.claude-request-list li {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.claude-request-subject {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.claude-request-meta,
+.claude-request-count {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+/* ---- rubrica ---- */
+
+/* Semicerchio allungato a sinistra delle mail dei contatti in rubrica. */
+.row .contact-mark {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 0;
+  width: 6px;
+  height: 30px;
+  margin-top: -15px;
+  border-radius: 0 15px 15px 0;
+  background: var(--contact);
+}
+
+.sender-name-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  min-height: 28px;
+}
+
+.add-contact {
+  width: 28px;
+  height: 28px;
+  color: var(--ink-2);
+}
+
+.add-contact:hover {
+  color: var(--accent);
+}
+
+.in-book {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
+  padding: 0 10px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f5f8fa;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.in-book:hover {
+  background: #eef2f5;
+  color: var(--ink);
+}
+
+.contact-mark-mini {
+  width: 4px;
+  height: 13px;
+  border-radius: 0 7px 7px 0;
+  background: var(--contact);
+}
+
+.in-book svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+/* Finestrella di una persona o di un'azienda: nasce dal pulsante che la apre. */
+.morph-window {
+  position: fixed;
+  z-index: 60;
+  top: 0;
+  left: 0;
+  width: 340px;
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--sheet);
+  box-shadow: 0 14px 36px rgba(23, 32, 42, 0.2);
+  will-change: transform;
+}
+
+.contact-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-weight: 700;
+}
+
+.contact-card-title svg {
+  width: 17px;
+  height: 17px;
+  color: var(--accent);
+}
+
+.contact-field {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.contact-field > span:first-child {
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+.contact-field input,
+.contact-field textarea {
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: 0;
+  background: #fff;
+}
+
+.contact-field input {
+  height: 32px;
+}
+
+.contact-field textarea {
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.contact-field input:focus,
+.contact-field textarea:focus {
+  border-color: var(--accent);
+}
+
+.contact-field-notes {
+  align-items: start;
+}
+
+.contact-field-notes > span:first-child {
+  padding-top: 6px;
+}
+
+.contact-field-static {
+  overflow: hidden;
+  color: var(--ink-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.contact-card-error {
+  margin: 4px 0 2px;
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.contact-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+/* Vista Rubrica */
+
+.book-new {
+  margin-left: auto;
+}
+
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--paper);
+}
+
+.segmented button {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.segmented button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--sheet);
+  color: var(--ink);
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--line);
+}
+
+.segmented button[aria-pressed="true"] svg {
+  color: var(--accent);
+}
+
+.book-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 4px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.book-group-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.book-group-count {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+.contact-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.contact-row:hover {
+  background: #f5f8fa;
+}
+
+.contact-row.selected {
+  background: var(--accent-soft);
+}
+
+.contact-row.selected::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--accent);
+}
+
+.contact-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.contact-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.contact-row-name,
+.contact-row-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.contact-row-name {
+  font-weight: 600;
+}
+
+.contact-row-meta {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.contact-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.contact-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.avatar-big {
+  width: 58px;
+  height: 58px;
+  font-size: 20px;
+}
+
+.contact-head-main {
+  min-width: 0;
+}
+
+.contact-head-main h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.contact-details {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 12px 14px;
+  margin: 0;
+  padding: 18px 20px;
+}
+
+.contact-details dt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.contact-details dt svg {
+  width: 15px;
+  height: 15px;
+}
+
+.contact-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.contact-details dd.none {
+  color: var(--ink-3);
+}
+
+.contact-notes {
+  white-space: pre-wrap;
+}
+
+/* Aziende nella vista "Per dominio" */
+
+.book-company-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--sheet);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.book-company-link svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--accent);
+}
+
+.book-company-link:hover,
+.book-company-link.selected {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.book-company {
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.book-company-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: #f5f8fa;
+  text-align: left;
+  cursor: pointer;
+}
+
+.book-company-head:hover {
+  background: #eef2f5;
+}
+
+.book-company-head.selected {
+  background: var(--accent-soft);
+}
+
+.book-company-head.selected::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--accent);
+}
+
+.company-badge {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: #fff;
+}
+
+.company-badge svg {
+  width: 16px;
+  height: 16px;
+}
+
+.book-company-name {
+  overflow: hidden;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.book-company-head .book-group-count {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+/* Sottogruppi di dominio dentro l'azienda: rientrati sotto la sua intestazione. */
+.book-subgroup .book-group-head {
+  padding-left: 52px;
+}
+
+.book-subgroup .contact-row {
+  padding-left: 52px;
+}
+
+/* Scheda dell'azienda */
+
+.company-avatar {
+  border-radius: 14px;
+}
+
+.company-avatar svg {
+  width: 26px;
+  height: 26px;
+}
+
+.company-domains {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.domain-chip {
+  padding: 1px 9px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #f5f8fa;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.company-site {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.company-site .icon-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.company-people {
+  padding-bottom: 12px;
+  border-top: 1px solid var(--line);
+}
+
+/* ---- firme ---- */
+
+/* La firma come arriva: stesso carattere di base dei messaggi inviati
+   (smtp.rs), misure come nei programmi di posta. */
+.sig-html {
+  color: #1b1b1b;
+  font: 11pt/1.35 "Segoe UI", Calibri, Arial, sans-serif;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.sig-html * {
+  box-sizing: content-box;
+}
+
+.sig-html img {
+  max-width: 100%;
+}
+
+.dialog.signatures-dialog {
+  width: min(1080px, 100%);
+  height: min(800px, 100%);
+}
+
+.signatures-dialog .dialog-head > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.sig-defaults {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 18px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--line-soft);
+}
+
+.sig-defaults-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sig-default-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.sig-default-email {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sig-default-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.sig-default-row select {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--sheet);
+  cursor: pointer;
+}
+
+.sig-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 250px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.sig-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+}
+
+.sig-list-loading {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--ink-3);
+}
+
+.sig-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sig-item:hover {
+  background: rgba(23, 32, 42, 0.05);
+}
+
+.sig-item.active {
+  background: var(--accent-soft);
+}
+
+.sig-item-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sig-item.active .sig-item-name {
+  color: var(--accent);
+}
+
+.sig-item-used {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.sig-list-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.sig-list-actions .btn {
+  justify-content: flex-start;
+}
+
+.sig-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 14px 18px;
+}
+
+.sig-name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sig-name-row label {
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sig-name-row .input {
+  flex: 1;
+}
+
+.sig-editor {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.sig-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--line-soft);
+}
+
+.sig-toolbar .grow,
+.sig-bar .grow {
+  flex: 1;
+}
+
+.sig-select {
+  width: 116px;
+  height: 30px;
+  margin-right: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--sheet);
+  cursor: pointer;
+}
+
+.sig-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 6px;
+  background: var(--line);
+}
+
+.sig-tool[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.sig-color {
+  position: relative;
+  cursor: pointer;
+}
+
+.sig-color.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Il quadratino del colore resta invisibile sopra l'icona: il clic apre la tavolozza. */
+.sig-color input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.sig-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-soft);
+}
+
+.sig-bar > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.sig-bar .input {
+  flex: 1;
+  height: 30px;
+}
+
+.sig-bar .input.sig-width {
+  flex: none;
+  width: 72px;
+}
+
+.sig-bar-label {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.sig-surface {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 18px;
+  overflow: auto;
+  outline: 0;
+  cursor: text;
+}
+
+.sig-surface:empty::before {
+  content: attr(data-placeholder);
+  color: var(--ink-3);
+}
+
+.sig-surface img {
+  cursor: pointer;
+}
+
+.sig-surface img.sig-picked {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sig-source {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 14px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  font: 12px/1.5 Consolas, "Cascadia Mono", monospace;
+  white-space: pre-wrap;
+}
+
+.sig-import h4 {
+  margin: 4px 0 12px;
+  font-size: 15px;
+}
+
+.sig-import p {
+  color: var(--ink-2);
+}
+
+.sig-import-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+}
+
+.sig-actions {
+  margin-top: 0;
 }

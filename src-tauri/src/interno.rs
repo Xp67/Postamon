@@ -27,7 +27,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-const KEYRING_SERVICE: &str = "Postamon-interno";
+/// Come per le caselle: l'accesso alla chat di Postamon Dev resta separato.
+const KEYRING_SERVICE: &str = if cfg!(debug_assertions) { "Postamon Dev-interno" } else { "Postamon-interno" };
 const DEFAULT_PORT: u16 = 8790;
 /// Server proposto quando si attiva la chat, e da cui si scaricano gli
 /// aggiornamenti finché nessuna casella è collegata. Lo fissa build.rs alla

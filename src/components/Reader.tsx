@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Download,
   File,
@@ -16,10 +16,13 @@ import {
   ReplyAll,
   Trash,
   TriangleAlert,
+  UserPlus,
 } from "lucide-react";
-import type { Attachment, Opened, Summary } from "../api";
+import type { Attachment, Contact, ContactInput, Opened, Summary } from "../api";
 import { avatarHue, fileSize, fullDate, initials, senderLabel } from "../format";
 import { AddonIcon, type AddonEntry } from "./AddonFrame";
+import { contactLabel } from "../book";
+import { ContactCard } from "./ContactCard";
 import { Help } from "./Help";
 
 interface Props {
@@ -35,10 +38,20 @@ interface Props {
   onOpenAttachment: (a: Attachment) => void;
   onSaveAttachment: (a: Attachment) => void;
   onLink: (url: string) => void;
-  onMailto: (address: string) => void;
+  /** Link `mailto:` intero, con oggetto e testo se ci sono. */
+  onMailto: (link: string) => void;
   /** Pulsanti degli add-on sul messaggio aperto. */
   addonButtons: AddonEntry[];
   onAddonButton: (entry: AddonEntry) => void;
+  /** Il mittente nella rubrica della casella, se c'è. */
+  contact: Contact | null;
+  /** Falso quando il mittente è la casella stessa (posta inviata, bozze). */
+  canAddContact: boolean;
+  onSaveContact: (contact: ContactInput) => Promise<unknown>;
+  onShowContact: (contact: Contact) => void;
+  suggestCompany: (address: string) => Promise<string | null>;
+  /** Aziende già in rubrica, proposte nel campo "Azienda". */
+  companyNames: string[];
 }
 
 function attachmentIcon(a: Attachment) {
@@ -50,9 +63,14 @@ function attachmentIcon(a: Attachment) {
 }
 
 export function Reader(props: Props) {
-  const { opened, summary, loading, error } = props;
+  const { opened, summary, loading, error, contact } = props;
   const frame = useRef<HTMLIFrameElement>(null);
   const [hoverUrl, setHoverUrl] = useState("");
+  // Pulsante da cui si è aperta la finestrella "Aggiungi alla rubrica".
+  const [adding, setAdding] = useState<HTMLElement | null>(null);
+
+  // Cambiando messaggio la finestrella si chiude.
+  useEffect(() => setAdding(null), [opened?.fromAddr, opened?.date, opened?.subject]);
 
   if (!opened) {
     return (
@@ -94,7 +112,7 @@ export function Reader(props: Props) {
       if (href.startsWith("#")) return;
       e.preventDefault();
       if (/^https?:/i.test(href)) props.onLink(href);
-      else if (/^mailto:/i.test(href)) props.onMailto(decodeURIComponent(href.slice(7).split("?")[0]));
+      else if (/^mailto:/i.test(href)) props.onMailto(href);
     });
     doc.addEventListener("mouseover", (e) => {
       const a = anchorOf(e.target);
@@ -115,7 +133,32 @@ export function Reader(props: Props) {
             {initials(opened.fromName, opened.fromAddr)}
           </div>
           <div className="sender-main">
-            <div className="sender-name">{senderLabel(opened.fromName, opened.fromAddr)}</div>
+            <div className="sender-name-line">
+              <span className="sender-name">
+                {contact ? contactLabel(contact) : senderLabel(opened.fromName, opened.fromAddr)}
+              </span>
+              {contact ? (
+                <button
+                  className="in-book"
+                  onClick={() => props.onShowContact(contact)}
+                  title="Apri il contatto nella rubrica"
+                >
+                  <span className="contact-mark-mini" />
+                  In rubrica
+                </button>
+              ) : (
+                props.canAddContact && (
+                  <button
+                    className="btn btn-ghost icon-btn add-contact"
+                    onClick={(e) => setAdding(e.currentTarget)}
+                    title="Aggiungi alla rubrica"
+                    aria-label="Aggiungi alla rubrica"
+                  >
+                    <UserPlus />
+                  </button>
+                )
+              )}
+            </div>
             <div className="sender-addr">{opened.fromAddr}</div>
           </div>
           <div className="sender-date">{fullDate(opened.date)}</div>
@@ -241,6 +284,18 @@ export function Reader(props: Props) {
         onLoad={wireLinks}
       />
       {hoverUrl && <div className="link-status">{hoverUrl}</div>}
+      {adding && (
+        <ContactCard
+          anchor={adding}
+          title="Aggiungi alla rubrica"
+          initial={{ address: opened.fromAddr, name: opened.fromName.trim(), company: "", phone: "", notes: "" }}
+          addressLocked
+          onSave={props.onSaveContact}
+          onClose={() => setAdding(null)}
+          suggestCompany={props.suggestCompany}
+          companyNames={props.companyNames}
+        />
+      )}
     </div>
   );
 }

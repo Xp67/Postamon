@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Archive,
+  BookUser,
   Ellipsis,
   FileText,
   Folder as FolderIcon,
   Inbox,
   LoaderCircle,
+  MailCheck,
   MessagesSquare,
   Send,
   ShieldAlert,
@@ -38,8 +40,12 @@ interface Props {
   chatUnread: number;
   onSelect: (folder: string) => void;
   onOpenChat: () => void;
+  contactsActive: boolean;
+  onOpenContacts: () => void;
   onEditSignature: (account: Account) => void;
   onRemoveAccount: (account: Account) => void;
+  /** Pagina di Windows dove si sceglie Postamon per i link email. */
+  onMailtoSettings: () => void;
   /** Viste degli add-on nella barra laterale. */
   addonViews: AddonEntry[];
   /** Chiave della vista aperta, se è un add-on. */
@@ -58,8 +64,11 @@ export function Sidebar({
   chatUnread,
   onSelect,
   onOpenChat,
+  contactsActive,
+  onOpenContacts,
   onEditSignature,
   onRemoveAccount,
+  onMailtoSettings,
   addonViews,
   activeAddon,
   onOpenAddon,
@@ -110,7 +119,16 @@ export function Sidebar({
               }}
             >
               <Signature />
-              Firma
+              Firme
+            </button>
+            <button
+              onClick={() => {
+                setMenu(false);
+                onMailtoSettings();
+              }}
+            >
+              <MailCheck />
+              Apri i link email con Postamon
             </button>
             {confirmRemove ? (
               <button className="danger" onClick={() => onRemoveAccount(account)}>
@@ -133,6 +151,11 @@ export function Sidebar({
         {chatUnread > 0 && <span className="count">{chatUnread}</span>}
       </button>
 
+      <button className={`folder ${contactsActive ? "active" : ""}`} onClick={onOpenContacts}>
+        <BookUser />
+        <span className="folder-label">Rubrica</span>
+      </button>
+
       {addonViews.length > 0 && (
         <>
           <div className="sidebar-section">Add-on</div>
@@ -153,7 +176,7 @@ export function Sidebar({
       <div className="sidebar-section">Posta</div>
       {folders.map((f) => {
         const Icon = (f.role && ROLE_ICONS[f.role]) || FolderIcon;
-        const active = !chatActive && activeAddon === null && folder === f.name;
+        const active = !chatActive && !contactsActive && activeAddon === null && folder === f.name;
         const showCount = f.unseen > 0 && f.role !== "sent" && f.role !== "trash" && f.role !== "junk";
         return (
           <button

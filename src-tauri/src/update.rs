@@ -58,6 +58,11 @@ fn info(update: &Update) -> UpdateInfo {
 }
 
 pub fn spawn(app: AppHandle, state: Arc<AppState>) {
+    // Una copia di sviluppo non si aggiorna: l'installer metterebbe il
+    // Postamon pubblicato al posto di quello installato.
+    if cfg!(debug_assertions) && std::env::var_os("POSTAMON_UPDATE_SERVER").is_none() {
+        return;
+    }
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_CHECK).await;
         loop {
