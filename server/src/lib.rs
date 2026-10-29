@@ -8,12 +8,14 @@
 //! - `db`: archivio SQLite.
 //! - `hub`: connessioni aperte, per consegnare subito i messaggi.
 //! - `api`: API HTTP e WebSocket.
+//! - `scarica`: pagina di download di Postamon (Windows e Android).
 
 pub mod api;
 mod auth;
 pub mod config;
 mod db;
 mod hub;
+mod scarica;
 pub mod tls;
 
 use anyhow::Result;

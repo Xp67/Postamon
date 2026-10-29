@@ -12,6 +12,7 @@ base64 = "0.23.1"
 futures = "0.3.34"
 getrandom = "0.4.3"
 ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-ring"] }
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }

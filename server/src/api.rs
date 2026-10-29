@@ -1,8 +1,9 @@
 //! API HTTP e canale WebSocket.
 //!
-//! Tutte le richieste tranne `/api/hello`, `/api/login` e
-//! `/api/aggiornamenti/` vogliono `Authorization: Bearer <token>` (o
-//! `?token=` per il WebSocket).
+//! Tutte le richieste tranne `/api/hello`, `/api/login`,
+//! `/api/aggiornamenti/` e la pagina di download (`/scarica`, modulo
+//! `scarica`) vogliono `Authorization: Bearer <token>` (o `?token=` per il
+//! WebSocket).
 //! Gli allegati si caricano a blocchi: `POST /api/uploads` li annuncia,
 //! `PUT /api/uploads/{id}?offset=N` aggiunge un blocco, e se la connessione
 //! cade si riprende dal valore `received` di `GET /api/uploads/{id}`.
@@ -91,6 +92,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/files/{id}", get(download))
         .route("/api/ws", get(ws))
         .route("/api/aggiornamenti/{name}", get(update_file))
+        .merge(crate::scarica::routes())
         .with_state(state)
 }
 

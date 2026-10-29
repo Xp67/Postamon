@@ -409,6 +409,52 @@ pub async fn attachment_save(
     run.await.map_err(fail)
 }
 
+/// Salva tutti gli allegati del messaggio nella cartella scelta. Non sovrascrive
+/// niente: un nome già presente diventa "nome (2).pdf". Restituisce quanti ne ha salvati.
+#[tauri::command]
+pub async fn attachments_save_all(
+    state: St<'_>,
+    account_id: String,
+    folder: String,
+    uid: u32,
+    dir: String,
+) -> Res<usize> {
+    let run = async {
+        let acc = state.accounts.get(&account_id)?;
+        let raw = load_raw(&state, &acc, &folder, uid).await?;
+        let all = render::all_attachments(&raw)?;
+        let dir = Path::new(&dir);
+        for (name, _, data) in &all {
+            save_new(dir, name, data)?;
+        }
+        Ok(all.len())
+    };
+    run.await.map_err(fail)
+}
+
+/// Scrive `data` in `dir` con un nome libero, aggiungendo " (2)", " (3)"… se serve.
+fn save_new(dir: &Path, name: &str, data: &[u8]) -> Result<PathBuf> {
+    use std::io::{ErrorKind, Write};
+    let name = safe_name(name);
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
+        _ => (name.clone(), String::new()),
+    };
+    for n in 1..1000 {
+        let path = if n == 1 { dir.join(&name) } else { dir.join(format!("{stem} ({n}){ext}")) };
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(data)
+                    .with_context(|| format!("Salvataggio di {} non riuscito", path.display()))?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).with_context(|| format!("Salvataggio di {name} non riuscito")),
+        }
+    }
+    bail!("Nella cartella ci sono già troppi file chiamati {name}")
+}
+
 #[tauri::command]
 pub async fn attachment_open(
     app: AppHandle,
@@ -1471,5 +1517,28 @@ References: <m1@x.it>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nVa bene.
     fn safe_names() {
         assert_eq!(safe_name("a/b:c?.pdf"), "a_b_c_.pdf");
         assert_eq!(safe_name(" .. "), "allegato");
+    }
+
+    #[test]
+    fn save_all_never_overwrites() {
+        let dir = std::env::temp_dir().join(format!("postamon-salva-tutti-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("fattura.pdf"), b"vecchia").unwrap();
+
+        let a = save_new(&dir, "fattura.pdf", b"uno").unwrap();
+        let b = save_new(&dir, "fattura.pdf", b"due").unwrap();
+        let c = save_new(&dir, "LEGGIMI", b"tre").unwrap();
+        let d = save_new(&dir, "LEGGIMI", b"quattro").unwrap();
+        let e = save_new(&dir, ".bashrc", b"cinque").unwrap();
+
+        let names: Vec<_> = [&a, &b, &c, &d, &e]
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["fattura (2).pdf", "fattura (3).pdf", "LEGGIMI", "LEGGIMI (2)", "bashrc"]);
+        assert_eq!(std::fs::read(dir.join("fattura.pdf")).unwrap(), b"vecchia");
+        assert_eq!(std::fs::read(&b).unwrap(), b"due");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -508,6 +508,9 @@ export const api = {
     invoke<void>("message_delete", { accountId, folder, uid }),
   saveAttachment: (accountId: string, folder: string, uid: number, index: number, path: string) =>
     invoke<void>("attachment_save", { accountId, folder, uid, index, path }),
+  /** Salva tutti gli allegati in `dir` senza sovrascrivere niente; restituisce quanti ne ha salvati. */
+  saveAllAttachments: (accountId: string, folder: string, uid: number, dir: string) =>
+    invoke<number>("attachments_save_all", { accountId, folder, uid, dir }),
   openAttachment: (accountId: string, folder: string, uid: number, index: number) =>
     invoke<void>("attachment_open", { accountId, folder, uid, index }),
   trustSender: (address: string) => invoke<void>("sender_trust", { address }),

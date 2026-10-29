@@ -294,15 +294,26 @@ fn seed_offline() {
             .unwrap();
     }
     let b64 = |data: &[u8]| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data);
-    let mail = |from: &str, subject: &str, date: &str, body: &str, file: &str, mime: &str, data: &[u8]| {
+    let mail_files = |from: &str, subject: &str, date: &str, body: &str, files: &[(&str, &str, &[u8])]| {
+        let parts: String = files
+            .iter()
+            .map(|(file, mime, data)| {
+                format!(
+                    "--zz\r\nContent-Type: {mime}\r\nContent-Disposition: attachment; filename=\"{file}\"\r\n\
+                     Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+                    b64(data)
+                )
+            })
+            .collect();
         format!(
             "From: {from}\r\nTo: Marco <marco@localhost>\r\nSubject: {subject}\r\nDate: {date}\r\nMIME-Version: 1.0\r\n\
              Content-Type: multipart/mixed; boundary=\"zz\"\r\n\r\n--zz\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{body}\r\n\
-             --zz\r\nContent-Type: {mime}\r\nContent-Disposition: attachment; filename=\"{file}\"\r\n\
-             Content-Transfer-Encoding: base64\r\n\r\n{}\r\n--zz--\r\n",
-            b64(data)
+             {parts}--zz--\r\n"
         )
         .into_bytes()
+    };
+    let mail = |from: &str, subject: &str, date: &str, body: &str, file: &str, mime: &str, data: &[u8]| {
+        mail_files(from, subject, date, body, &[(file, mime, data)])
     };
     let photo = std::fs::read(r"C:\Windows\Web\Wallpaper\Windows\img0.jpg").unwrap();
     let messages = [
@@ -323,6 +334,19 @@ fn seed_offline() {
             "soggiorno.jpg",
             "image/jpeg",
             &photo,
+        ),
+        // Tanti allegati, due con lo stesso nome: per "Scarica tutti".
+        mail_files(
+            "Paolo Ferrari <paolo.ferrari@arredamentiferrari.it>",
+            "Documenti per la consegna",
+            "Thu, 22 Oct 2026 12:15:00 +0200",
+            "Ciao Marco, ti giro i documenti per la consegna di venerdì.",
+            &[
+                ("DDT 4512.pdf", "application/pdf", &sample_pdf()),
+                ("Foto imballo.jpg", "image/jpeg", &photo),
+                ("note.txt", "text/plain", "Scarico dal retro, citofono Rossi".as_bytes()),
+                ("note.txt", "text/plain", "Portare i piedini di ricambio".as_bytes()),
+            ],
         ),
     ];
     let shop_mail = mail(
@@ -346,7 +370,7 @@ fn seed_offline() {
         store.put_body(&a.id, "INBOX", *uid, raw, &preview, has_attachments).unwrap();
     }
     // Contatori come li darebbe il server.
-    store.set_counts(&acc.id, "INBOX", 2, 2).unwrap();
+    store.set_counts(&acc.id, "INBOX", 3, 3).unwrap();
     store.set_counts(&shop.id, "INBOX", 1, 1).unwrap();
     // Rubrica: Anna è già un contatto (segno nella lista), Luca no (icona per aggiungerlo).
     // Arredamenti Ferrari ha due domini e Sara le scrive da Gmail; Marta da Gmail per Tappezzeria Ronchi.

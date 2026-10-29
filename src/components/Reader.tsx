@@ -37,6 +37,7 @@ interface Props {
   onShowImages: (always: boolean) => void;
   onOpenAttachment: (a: Attachment) => void;
   onSaveAttachment: (a: Attachment) => void;
+  onSaveAllAttachments: () => Promise<void>;
   onLink: (url: string) => void;
   /** Link `mailto:` intero, con oggetto e testo se ci sono. */
   onMailto: (link: string) => void;
@@ -68,6 +69,16 @@ export function Reader(props: Props) {
   const [hoverUrl, setHoverUrl] = useState("");
   // Pulsante da cui si è aperta la finestrella "Aggiungi alla rubrica".
   const [adding, setAdding] = useState<HTMLElement | null>(null);
+  const [savingAll, setSavingAll] = useState(false);
+
+  const saveAll = async () => {
+    setSavingAll(true);
+    try {
+      await props.onSaveAllAttachments();
+    } finally {
+      setSavingAll(false);
+    }
+  };
 
   // Cambiando messaggio la finestrella si chiude.
   useEffect(() => setAdding(null), [opened?.fromAddr, opened?.date, opened?.subject]);
@@ -250,6 +261,18 @@ export function Reader(props: Props) {
 
       {opened.attachments.length > 0 && (
         <div className="attachments">
+          {opened.attachments.length > 1 && (
+            <div className="attachments-head">
+              <span>
+                {opened.attachments.length} allegati ·{" "}
+                {fileSize(opened.attachments.reduce((sum, a) => sum + a.size, 0))}
+              </span>
+              <button className="btn btn-small" onClick={() => void saveAll()} disabled={savingAll}>
+                {savingAll ? <LoaderCircle className="spin" /> : <Download />}
+                Scarica tutti
+              </button>
+            </div>
+          )}
           {opened.attachments.map((a) => {
             const Icon = attachmentIcon(a);
             return (

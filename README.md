@@ -17,7 +17,8 @@ delle caselle aziendali, senza il resto di Outlook.
   restano bloccate finché non le chiedi ("Mostra immagini" o "Sempre da questo mittente"). Il messaggio è
   mostrato in un riquadro isolato con una Content-Security-Policy; i link si aprono nel browser.
 - **Allegati**: si aprono con il programma predefinito o si salvano. I tipi eseguibili (.exe, .js, .bat, .lnk…)
-  non si aprono da qui: vanno salvati.
+  non si aprono da qui: vanno salvati. Con due o più allegati, "Scarica tutti" li salva nella cartella scelta
+  (Download di partenza) senza sovrascrivere niente: un nome già presente diventa "nome (2).pdf".
 - **Scrittura**: nuovo messaggio, rispondi, rispondi a tutti, inoltra (con gli allegati originali), Cc e Ccn,
   allegati da pulsante o trascinandoli sulla finestra, suggerimento degli indirizzi già visti. Dopo l'invio la
   copia va in "Posta inviata".
@@ -249,6 +250,10 @@ Il server è `server/` (crate `postamon-interno`, Rust: axum, SQLite, LDAP):
 - **Aggiornamenti di Postamon**: `GET /api/aggiornamenti/latest.json` e `/api/aggiornamenti/<installer>`, senza
   accesso, dalla cartella `dati/aggiornamenti/` (vedi "Installazione e aggiornamenti"). Senza `latest.json`
   risponde 204, cioè "niente di nuovo".
+- **Pagina di download** (`server/src/scarica.rs`): `https://<server>/scarica` (anche solo `https://<server>/`)
+  mostra l'ultima versione per Windows e per Android, letta dallo stesso `latest.json`, con un QR per scaricare
+  l'APK dal telefono. `/scarica/windows` e `/scarica/android` portano sempre al file dell'ultima versione: sono
+  gli indirizzi da usare nei collegamenti. Senza accesso, come gli aggiornamenti.
 
 **Installazione** (Linux), cartella `~/postamon-interno/` dell'utente che lo fa girare: eseguibile,
 `postamon-interno.toml` (modello in `server/deploy/postamon-interno.esempio.toml`), `dati/`, `interno.log`. Lo

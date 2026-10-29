@@ -170,6 +170,7 @@ pub fn run() {
             commands::message_set_flagged,
             commands::message_delete,
             commands::attachment_save,
+            commands::attachments_save_all,
             commands::attachment_open,
             commands::sender_trust,
             commands::contacts_suggest,

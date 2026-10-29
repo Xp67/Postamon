@@ -127,10 +127,12 @@ require_main() {
 	[ "$b" = "$MAIN" ] || die "Sei su '$b': si pubblica da $MAIN."
 }
 
+# Niente modifiche non committate, in tutto il repo o solo nei percorsi dati
+# (pm server guarda solo server/: il lavoro in corso sull'app non lo blocca).
 require_clean() {
-	if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+	if ! git diff --quiet HEAD -- "$@" 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard -- "$@")" ]; then
 		printf '%s✗ Ci sono modifiche non committate: non partirebbero.%s\n\n' "$R" "$N" >&2
-		git status --short >&2
+		git status --short -- "$@" >&2
 		printf '\nCommittale, oppure mettile da parte con "git stash".\n' >&2
 		exit 1
 	fi
@@ -365,7 +367,7 @@ restore_server() {
 
 cmd_server() {
 	require_main
-	require_clean
+	require_clean server
 	load_config
 	fetch
 	local ahead

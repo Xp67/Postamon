@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { downloadDir, join } from "@tauri-apps/api/path";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CircleCheck, CircleArrowUp, RefreshCw, RotateCw, Sparkles, SquarePen, TriangleAlert } from "lucide-react";
 import {
@@ -777,6 +777,27 @@ export default function App() {
     }
   };
 
+  const saveAllAttachments = async () => {
+    const cur = currentRef.current;
+    if (!cur || selectedUid === null) return;
+    const uid = selectedUid;
+    let defaultPath: string | undefined;
+    try {
+      defaultPath = await downloadDir();
+    } catch {
+      // cartella Download non trovata: decide la finestra di Windows
+    }
+    const dir = await openDialog({ title: "Scarica tutti gli allegati in…", directory: true, defaultPath });
+    if (typeof dir !== "string") return;
+    try {
+      const count = await api.saveAllAttachments(cur.accountId, cur.folder, uid, dir);
+      const where = dir.split(/[\\/]/).filter(Boolean).pop() ?? dir;
+      showToast(`Salvati ${count} allegati in ${where}`);
+    } catch (e) {
+      showToast(errorText(e), "error");
+    }
+  };
+
   const onSent = (report: SendReport) => {
     setCompose(null);
     if (report.warning) showToast(report.warning, "warn");
@@ -1006,6 +1027,7 @@ export default function App() {
             onShowImages={(always) => void showImages(always)}
             onOpenAttachment={(a) => void previewAttachment(a)}
             onSaveAttachment={(a) => void saveAttachment(a)}
+            onSaveAllAttachments={saveAllAttachments}
             onLink={(url) => void openUrl(url)}
             onMailto={(link) => void api.mailtoParse(link).then((m) => m && newMessage(m))}
             addonButtons={addonButtons}
