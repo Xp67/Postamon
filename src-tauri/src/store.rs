@@ -1,7 +1,7 @@
 //! Archivio locale SQLite: cartelle, intestazioni dei messaggi e messaggi
 //! scaricati. Serve a mostrare subito la posta senza aspettare il server.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
@@ -139,6 +139,18 @@ pub struct SavedCompany {
 pub struct SavedContact {
     pub contact: Contact,
     pub company_shared: usize,
+}
+
+/// Esito di un'importazione nella rubrica.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReport {
+    /// Contatti nuovi.
+    pub added: usize,
+    /// Contatti che c'erano già e a cui l'importazione ha riempito campi vuoti.
+    pub completed: usize,
+    /// Indirizzi non validi, lasciati fuori.
+    pub skipped: usize,
 }
 
 /// Domini di posta di uso comune (e di PEC): chi li usa non dice niente della
@@ -868,6 +880,79 @@ impl Store {
             .optional()?)
     }
 
+    /// Importa contatti da un'altra rubrica senza toccare quello che c'è già
+    /// scritto: di un contatto già presente riempie solo i campi vuoti. Poi,
+    /// come per un contatto salvato a mano, chi ha un dominio aziendale e
+    /// nessuna azienda prende quella più frequente fra i colleghi.
+    pub fn import_contacts(&self, account: &str, list: &[ContactInput]) -> Result<ImportReport> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let snapshot = |tx: &rusqlite::Transaction<'_>| -> Result<HashMap<String, (String, String, String, String)>> {
+            let mut stmt =
+                tx.prepare("SELECT address, name, company, phone, notes FROM contacts WHERE account = ?1")?;
+            let rows = stmt
+                .query_map([account], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))))?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok(rows)
+        };
+        let before = snapshot(&tx)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let mut report = ImportReport::default();
+        let mut domains = HashSet::new();
+        for input in list {
+            let address = input.address.trim().to_lowercase();
+            if !address.contains('@') || address.contains(char::is_whitespace) {
+                report.skipped += 1;
+                continue;
+            }
+            let (name, company, phone, notes) =
+                (input.name.trim(), input.company.trim(), input.phone.trim(), input.notes.trim());
+            let added = tx.execute(
+                "INSERT INTO contacts (account, address, name, company, phone, notes, created)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT (account, address) DO NOTHING",
+                params![account, address, name, company, phone, notes, now],
+            )?;
+            if added == 0 {
+                tx.execute(
+                    "UPDATE contacts SET
+                       name = CASE name WHEN '' THEN ?3 ELSE name END,
+                       company = CASE company WHEN '' THEN ?4 ELSE company END,
+                       phone = CASE phone WHEN '' THEN ?5 ELSE phone END,
+                       notes = CASE notes WHEN '' THEN ?6 ELSE notes END
+                     WHERE account = ?1 AND address = ?2",
+                    params![account, address, name, company, phone, notes],
+                )?;
+            }
+            if let Some(domain) = business_domain(&address) {
+                domains.insert(domain.to_string());
+            }
+        }
+        for domain in &domains {
+            tx.execute(
+                "UPDATE contacts SET company = (
+                   SELECT company FROM contacts
+                   WHERE account = ?1 AND company != '' AND address LIKE ?2 ESCAPE '\\'
+                   GROUP BY company ORDER BY COUNT(*) DESC, MAX(id) DESC LIMIT 1)
+                 WHERE account = ?1 AND company = '' AND address LIKE ?2 ESCAPE '\\'
+                   AND EXISTS (SELECT 1 FROM contacts
+                               WHERE account = ?1 AND company != '' AND address LIKE ?2 ESCAPE '\\')",
+                params![account, domain_pattern(domain)],
+            )?;
+        }
+        for (address, row) in snapshot(&tx)? {
+            match before.get(&address) {
+                None => report.added += 1,
+                Some(old) if *old != row => report.completed += 1,
+                Some(_) => {}
+            }
+        }
+        tx.commit()?;
+        Ok(report)
+    }
+
     pub fn delete_contact(&self, account: &str, id: i64) -> Result<()> {
         self.db().execute("DELETE FROM contacts WHERE account = ?1 AND id = ?2", params![account, id])?;
         Ok(())
@@ -1127,6 +1212,45 @@ mod tests {
         let names = s.companies("a").unwrap().into_iter().map(|c| c.name).collect::<Vec<_>>();
         assert_eq!(names, vec!["Ferri Gomme SpA", "Tappezzeria Ronchi"]);
         assert_eq!(s.companies("a").unwrap()[0].vat, "IT01234567890");
+    }
+
+    #[test]
+    fn import_fills_only_empty_fields() {
+        let s = Store::in_memory().unwrap();
+        let input = |address: &str, name: &str, company: &str, phone: &str| ContactInput {
+            address: address.into(),
+            name: name.into(),
+            company: company.into(),
+            phone: phone.into(),
+            ..Default::default()
+        };
+        // Già in rubrica: il nome scritto a mano resta, il telefono vuoto si riempie.
+        s.save_contact("a", &input("anna@ferrigomme.it", "Anna", "", "")).unwrap();
+        s.save_contact("a", &input("elena@libero.it", "Elena Rizzo", "", "")).unwrap();
+        let report = s
+            .import_contacts(
+                "a",
+                &[
+                    input(" Anna@FerriGomme.it ", "Anna Ferri", "", "339 1"),
+                    input("elena@libero.it", "Elena R.", "", ""),
+                    input("paolo@ferrigomme.it", "Paolo", "Ferri Gomme", ""),
+                    input("paolo@ferrigomme.it", "Paolo Doppio", "", "02 2"),
+                    input("non è un indirizzo", "", "", ""),
+                ],
+            )
+            .unwrap();
+        assert_eq!(report, ImportReport { added: 1, completed: 1, skipped: 1 });
+        let book = s.address_book("a").unwrap();
+        let row = |addr: &str| book.iter().find(|c| c.address == addr).unwrap();
+        let anna = row("anna@ferrigomme.it");
+        assert_eq!((anna.name.as_str(), anna.phone.as_str()), ("Anna", "339 1"));
+        assert_eq!(anna.company, "Ferri Gomme", "prende l'azienda del collega");
+        assert_eq!(row("elena@libero.it").name, "Elena Rizzo");
+        let paolo = row("paolo@ferrigomme.it");
+        assert_eq!((paolo.name.as_str(), paolo.phone.as_str()), ("Paolo", "02 2"));
+        // Una seconda importazione uguale non cambia niente.
+        let again = s.import_contacts("a", &[input("paolo@ferrigomme.it", "Paolo", "Ferri Gomme", "")]).unwrap();
+        assert_eq!(again, ImportReport::default());
     }
 
     #[test]

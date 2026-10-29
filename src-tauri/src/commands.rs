@@ -13,9 +13,10 @@ use crate::AppState;
 use crate::accounts::{self, Account};
 use crate::render::{self, Attachment, Rendered, format_person};
 use crate::store::{
-    Company, CompanyInput, Contact, ContactInput, Flag, Folder, SavedCompany, SavedContact, Summary,
+    Company, CompanyInput, Contact, ContactInput, Flag, Folder, ImportReport, SavedCompany, SavedContact, Summary,
 };
 use crate::signatures::{self, Signature};
+use crate::outlook::{self, OutlookBook};
 use crate::{addons, claude, craft, imap, interno, mailto, smtp, sync, update};
 
 type Res<T> = std::result::Result<T, String>;
@@ -690,6 +691,17 @@ pub fn address_book_companies(state: St<'_>, account_id: String) -> Res<Vec<Comp
 #[tauri::command]
 pub fn address_book_company_save(state: St<'_>, account_id: String, company: CompanyInput) -> Res<SavedCompany> {
     state.store.save_company(&account_id, &company).map_err(fail)
+}
+
+/// Contatti di Outlook classico su questo PC, da scegliere prima di importarli.
+#[tauri::command]
+pub async fn outlook_contacts(state: St<'_>) -> Res<OutlookBook> {
+    outlook::read(&state.temp_dir).await.map_err(fail)
+}
+
+#[tauri::command]
+pub fn address_book_import(state: St<'_>, account_id: String, contacts: Vec<ContactInput>) -> Res<ImportReport> {
+    state.store.import_contacts(&account_id, &contacts).map_err(fail)
 }
 
 #[derive(Serialize)]

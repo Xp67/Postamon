@@ -193,6 +193,19 @@ export default function App() {
     [loadBook, showToast],
   );
 
+  const importContacts = useCallback(
+    async (accountId: string, list: ContactInput[]) => {
+      const { added, completed } = await api.importContacts(accountId, list);
+      await loadBook(accountId);
+      const parts = [
+        added === 1 ? "1 contatto nuovo" : `${added} contatti nuovi`,
+        ...(completed ? [completed === 1 ? "1 completato" : `${completed} completati`] : []),
+      ];
+      showToast(`Importati da Outlook: ${parts.join(", ")}`);
+    },
+    [loadBook, showToast],
+  );
+
   const deleteContact = useCallback(
     async (accountId: string, contact: Contact) => {
       try {
@@ -961,6 +974,7 @@ export default function App() {
             suggestCompany={(address) => api.companyFor(currentAccount.id, address)}
             onDelete={(c) => deleteContact(currentAccount.id, c)}
             onSaveCompany={(input) => saveCompany(currentAccount.id, input)}
+            onImport={(list) => importContacts(currentAccount.id, list)}
             onWrite={(to) => newMessage({ to })}
           />
         ) : view === "chat" ? (

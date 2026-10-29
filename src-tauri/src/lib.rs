@@ -51,6 +51,7 @@ mod craft;
 mod imap;
 mod interno;
 mod mailto;
+mod outlook;
 mod render;
 mod signatures;
 mod smtp;
@@ -180,6 +181,8 @@ pub fn run() {
             commands::address_book_delete,
             commands::address_book_companies,
             commands::address_book_company_save,
+            commands::address_book_import,
+            commands::outlook_contacts,
             commands::files_info,
             commands::compose_from,
             commands::message_send,

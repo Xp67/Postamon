@@ -96,15 +96,23 @@ if (-not $SoloInvio) {
 
     # ---- 2. installer firmato ----
 
-    $env:TAURI_SIGNING_PRIVATE_KEY = [IO.File]::ReadAllText($ChiaveFirma).Trim()
-    $env:CARGO_TARGET_DIR = $target
-    Push-Location $root
-    try {
-        npx tauri build
-        if ($LASTEXITCODE -ne 0) { Fail "Compilazione non riuscita" }
-    } finally {
-        Pop-Location
+    # La chiave ha la password vuota, ma se TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+    # manca Tauri la chiede a terminale. PowerShell non sa creare una variabile
+    # vuota ($env:X = "" la cancella): la compilazione parte con ProcessStartInfo,
+    # che la passa, e senza npx, che la ripasserebbe da un'altra shell.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = (Get-Command node).Source
+    $psi.Arguments = '"' + (Join-Path $root "node_modules\@tauri-apps\cli\tauri.js") + '" build'
+    $psi.WorkingDirectory = $root
+    $psi.UseShellExecute = $false
+    $psi.EnvironmentVariables["TAURI_SIGNING_PRIVATE_KEY"] = [IO.File]::ReadAllText($ChiaveFirma).Trim()
+    if ($null -eq $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+        $psi.EnvironmentVariables["TAURI_SIGNING_PRIVATE_KEY_PASSWORD"] = ""
     }
+    $psi.EnvironmentVariables["CARGO_TARGET_DIR"] = $target
+    $build = [System.Diagnostics.Process]::Start($psi)
+    $build.WaitForExit()
+    if ($build.ExitCode -ne 0) { Fail "Compilazione non riuscita" }
 
     if (-not (Test-Path $exe) -or -not (Test-Path $sig)) { Fail "Installer o firma non trovati in $bundle" }
 

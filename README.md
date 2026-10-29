@@ -45,7 +45,14 @@ delle caselle aziendali, senza il resto di Outlook.
   persone, "Scrivi a tutti"), aperta dall'intestazione del gruppo o dall'azienda nella scheda di una persona;
   rinominandola cambia il nome a tutte le sue persone, e se la si rinomina dalla scheda di una persona la scheda
   la segue. Il campo "Azienda" propone le aziende già in rubrica. Togliendo la casella da Postamon la rubrica
-  resta nell'archivio e torna se la si riaggiunge. Le animazioni usano anime.js (`src/anim.ts`), che con "meno movimento" di Windows
+  resta nell'archivio e torna se la si riaggiunge.
+- **Importa da Outlook** (tasto "Importa" nella Rubrica, o al centro se è vuota): legge le cartelle di contatti
+  di Outlook classico (gruppi compresi) e fa scegliere chi importare; partono scelte le cartelle della casella con
+  lo stesso indirizzo. Ogni indirizzo email diventa un contatto (telefoni uniti, corpo del contatto nelle note);
+  di chi è già in rubrica riempie solo i campi vuoti, e poi vale la regola dell'azienda per dominio. Outlook resta
+  com'è: se era chiuso, Postamon lo avvia senza finestre e lo richiude con Restart Manager (`Quit()` lascerebbe
+  un Outlook nascosto che continua a scaricare posta e ad applicare le sue regole). Il nuovo Outlook non si può
+  leggere. Le animazioni usano anime.js (`src/anim.ts`), che con "meno movimento" di Windows
   porta subito allo stato finale.
 - **Barra del titolo nel colore dell'app** (Windows 11): la barra di Windows prende il grigio-azzurro della
   fascia in alto, così a finestra ingrandita non c'è stacco; pulsanti, aggancio ai bordi e doppio clic restano
@@ -210,6 +217,7 @@ POSTAMON_DATA_DIR=<cartella> npm run app            # (dalla radice) Postamon De
 | `src-tauri/src/signatures.rs` | elenco delle firme, pulizia dell'HTML, import da Outlook, immagini come `cid:` |
 | `src-tauri/src/render.rs` | lettura MIME, pulizia dell'HTML, testo per anteprime e citazioni |
 | `src-tauri/src/store.rs` | archivio locale SQLite, rubrica compresa |
+| `src-tauri/src/outlook.rs`, `outlook.ps1` | lettura della rubrica di Outlook (COM via PowerShell) e sua chiusura |
 | `src-tauri/src/accounts.rs` | caselle e password |
 | `src-tauri/src/sync.rs` | controllo periodico e notifiche |
 | `src-tauri/src/update.rs` | aggiornamenti automatici dal server della chat |

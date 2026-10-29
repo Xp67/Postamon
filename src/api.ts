@@ -139,6 +139,32 @@ export interface ContactInput {
   notes: string;
 }
 
+/** Una persona di Outlook per indirizzo email, pronta da importare. */
+export interface OutlookPerson {
+  name: string;
+  address: string;
+  company: string;
+  phone: string;
+  notes: string;
+  /** Gruppo di Outlook da cui arriva, se non è anche un contatto. */
+  group: string | null;
+}
+
+export interface OutlookFolder {
+  /** Casella di Outlook della cartella (di solito il suo indirizzo). */
+  store: string;
+  name: string;
+  people: OutlookPerson[];
+  withoutEmail: number;
+}
+
+export interface ImportReport {
+  added: number;
+  /** Già in rubrica, con qualche campo vuoto riempito. */
+  completed: number;
+  skipped: number;
+}
+
 export interface ComposeData {
   accountId: string;
   to: string;
@@ -524,6 +550,11 @@ export const api = {
   companies: (accountId: string) => invoke<Company[]>("address_book_companies", { accountId }),
   saveCompany: (accountId: string, company: CompanyInput) =>
     invoke<SavedCompany>("address_book_company_save", { accountId, company }),
+  /** Legge la rubrica di Outlook classico (avviandolo senza finestre se serve). */
+  outlookContacts: () => invoke<{ folders: OutlookFolder[] }>("outlook_contacts"),
+  /** Importa senza sovrascrivere: dei contatti già presenti riempie solo i campi vuoti. */
+  importContacts: (accountId: string, contacts: ContactInput[]) =>
+    invoke<ImportReport>("address_book_import", { accountId, contacts }),
   filesInfo: (paths: string[]) => invoke<FileInfo[]>("files_info", { paths }),
   composeFrom: (accountId: string, folder: string, uid: number, mode: "reply" | "replyAll" | "forward") =>
     invoke<ComposeData>("compose_from", { accountId, folder, uid, mode }),

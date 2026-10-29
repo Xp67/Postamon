@@ -8,6 +8,7 @@ import {
   CalendarPlus,
   ExternalLink,
   Globe,
+  Import,
   LoaderCircle,
   Mail,
   MapPin,
@@ -33,6 +34,7 @@ import {
 import { avatarHue, initials } from "../format";
 import { CompanyCard } from "./CompanyCard";
 import { ContactCard } from "./ContactCard";
+import { OutlookImport } from "./OutlookImport";
 
 type Grouping = "alpha" | "domain";
 const GROUPING_KEY = "postamon.rubrica-gruppi";
@@ -55,6 +57,8 @@ interface Props {
   onSave: (contact: ContactInput) => Promise<Contact>;
   onDelete: (contact: Contact) => Promise<void>;
   onSaveCompany: (company: CompanyInput) => Promise<Company>;
+  /** Importa contatti (da Outlook) senza sovrascrivere quelli che ci sono. */
+  onImport: (list: ContactInput[]) => Promise<void>;
   /** Nuovo messaggio a questi destinatari. */
   onWrite: (to: string) => void;
   suggestCompany: (address: string) => Promise<string | null>;
@@ -93,6 +97,7 @@ export function AddressBook({
   onSave,
   onDelete,
   onSaveCompany,
+  onImport,
   onWrite,
   suggestCompany,
 }: Props) {
@@ -102,6 +107,8 @@ export function AddressBook({
   const [companySel, setCompanySel] = useState<string | null>(null);
   const [card, setCard] = useState<{ anchor: HTMLElement; contact: Contact | null } | null>(null);
   const [companyCard, setCompanyCard] = useState<{ anchor: HTMLElement; info: CompanyInfo } | null>(null);
+  // Pulsante da cui si è aperta l'importazione da Outlook.
+  const [importFrom, setImportFrom] = useState<HTMLElement | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const list = useRef<HTMLDivElement>(null);
@@ -111,6 +118,7 @@ export function AddressBook({
     setCard(null);
     setCompanyCard(null);
     setCompanySel(null);
+    setImportFrom(null);
   }, [account.id]);
 
   useEffect(() => {
@@ -223,7 +231,15 @@ export function AddressBook({
               {account.email} · {count === 1 ? "1 contatto" : `${count} contatti`}
             </span>
             <button
-              className="btn btn-primary btn-small book-new"
+              className="btn btn-small book-import"
+              onClick={(e) => setImportFrom(e.currentTarget)}
+              title="Importa i contatti dalla rubrica di Outlook"
+            >
+              <Import />
+              Importa
+            </button>
+            <button
+              className="btn btn-primary btn-small"
               onClick={(e) => setCard({ anchor: e.currentTarget, contact: null })}
             >
               <UserPlus />
@@ -256,6 +272,12 @@ export function AddressBook({
               <div>
                 <BookUser />
                 <div>{query ? "Nessun contatto trovato" : "La rubrica è vuota"}</div>
+                {!query && (
+                  <button className="btn btn-small book-empty-import" onClick={(e) => setImportFrom(e.currentTarget)}>
+                    <Import />
+                    Importa da Outlook
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -425,6 +447,15 @@ export function AddressBook({
             setCompanySel(companyKey(saved.name));
           }}
           onClose={() => setCompanyCard(null)}
+        />
+      )}
+      {importFrom && (
+        <OutlookImport
+          anchor={importFrom}
+          email={account.email}
+          contacts={contacts ?? []}
+          onImport={onImport}
+          onClose={() => setImportFrom(null)}
         />
       )}
     </>

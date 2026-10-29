@@ -7,6 +7,8 @@ interface Props {
   /** Pulsante da cui la finestra nasce e in cui torna chiudendosi. */
   anchor: HTMLElement;
   label: string;
+  /** Classe in più, per finestre di misura diversa (la misura deve restare fissa). */
+  className?: string;
   onClose: () => void;
   /** Il contenuto riceve `close`, che fa rientrare la finestra nel pulsante. */
   children: (close: () => void) => ReactNode;
@@ -21,7 +23,7 @@ type Morph = (back: boolean, done?: () => void) => void;
  * Finestrella che si apre trasformandosi dal pulsante che la chiama (che
  * intanto sparisce) e chiudendosi ci rientra. Esc e un clic fuori la chiudono.
  */
-export function MorphWindow({ anchor, label, onClose, children }: Props) {
+export function MorphWindow({ anchor, label, className, onClose, children }: Props) {
   // Posizione del pulsante all'apertura: la finestra ci torna anche se nel
   // frattempo il pulsante è stato sostituito (contatto appena salvato).
   const from = useRef(anchor.getBoundingClientRect());
@@ -117,7 +119,7 @@ export function MorphWindow({ anchor, label, onClose, children }: Props) {
   }, [box, close]);
 
   return createPortal(
-    <div ref={box} className="morph-window" role="dialog" aria-label={label}>
+    <div ref={box} className={`morph-window ${className ?? ""}`} role="dialog" aria-label={label}>
       <div className="morph-window-body">{children(close)}</div>
     </div>,
     document.body,
