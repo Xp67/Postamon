@@ -1,6 +1,6 @@
 [package]
 name = "postamon"
-version = "0.1.0"
+version = "1.0.0"
 description = "Postamon - client di posta per le caselle aziendali"
 authors = ["Marco"]
 edition = "2024"
